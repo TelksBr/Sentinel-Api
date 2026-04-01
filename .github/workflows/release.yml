@@ -1,0 +1,42 @@
+name: Build and Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.21'
+
+      - name: Run tests
+        run: go test ./...
+
+      - name: Build Linux x64
+        run: GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o build/api-v2_x64 ./cmd/api
+
+      - name: Build Linux ARM64
+        run: GOOS=linux GOARCH=arm64 go build -ldflags="-s -w" -o build/api-v2_arm64 ./cmd/api
+
+      - name: Build Linux x64 Static
+        run: CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -a -installsuffix cgo -ldflags="-s -w" -o build/api-v2_static ./cmd/api
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            build/api-v2_x64
+            build/api-v2_arm64
+            build/api-v2_static
