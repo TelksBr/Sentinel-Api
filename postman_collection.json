@@ -1,14 +1,14 @@
 {
   "info": {
-    "name": "API Atlas V2",
-    "description": "Coleção completa da API Atlas V2 - Gerenciamento de usuários SSH e V2Ray",
+    "name": "Sentinel API",
+    "description": "Coleção completa da Sentinel API - Gerenciamento de usuários SSH e V2Ray",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
     "version": "1.1.0"
   },
   "variable": [
     {
       "key": "baseUrl",
-      "value": "http://premium1.sshtproject.com:8090",
+      "value": "http://suaurl-da-api:port",
       "type": "string"
     },
     {
@@ -22,38 +22,26 @@
       "name": "Health Check",
       "request": {
         "method": "GET",
-        "header": [
-          {
-            "key": "Authorization",
-            "value": "Bearer {{apiKey}}",
-            "type": "text"
-          }
-        ],
+        "header": [],
         "url": {
           "raw": "{{baseUrl}}/",
           "host": ["{{baseUrl}}"],
           "path": [""]
         },
-        "description": "Verifica se a API está funcionando"
+        "description": "Verifica se a API está funcionando. Rota pública (sem autenticação)."
       }
     },
     {
       "name": "Usuários Online (Contadores)",
       "request": {
         "method": "GET",
-        "header": [
-          {
-            "key": "Authorization",
-            "value": "Bearer {{apiKey}}",
-            "type": "text"
-          }
-        ],
+        "header": [],
         "url": {
           "raw": "{{baseUrl}}/onlines",
           "host": ["{{baseUrl}}"],
           "path": ["onlines"]
         },
-        "description": "Retorna contadores de usuários SSH e V2Ray online (do cache)"
+        "description": "Retorna contadores de usuários SSH e V2Ray online (do cache). Rota pública (sem autenticação)."
       }
     },
     {
@@ -110,19 +98,13 @@
       "name": "Recursos do Sistema (CPU e RAM)",
       "request": {
         "method": "GET",
-        "header": [
-          {
-            "key": "Authorization",
-            "value": "Bearer {{apiKey}}",
-            "type": "text"
-          }
-        ],
+        "header": [],
         "url": {
           "raw": "{{baseUrl}}/system/resources",
           "host": ["{{baseUrl}}"],
           "path": ["system", "resources"]
         },
-        "description": "Retorna informações de recursos do sistema (memória e CPU)"
+        "description": "Retorna informações de recursos do sistema (memória e CPU). Rota pública (sem autenticação)."
       }
     },
     {
@@ -209,7 +191,7 @@
               "host": ["{{baseUrl}}"],
               "path": ["ssh_user", "usuario1"]
             },
-            "description": "Atualiza a senha de um usuário SSH"
+            "description": "Atualiza apenas a senha de um usuário SSH"
           }
         },
         {
@@ -237,7 +219,35 @@
               "host": ["{{baseUrl}}"],
               "path": ["ssh_user", "usuario1"]
             },
-            "description": "Atualiza a validade (dias) de um usuário SSH"
+            "description": "Atualiza apenas a validade (dias) de um usuário SSH"
+          }
+        },
+        {
+          "name": "Atualizar Senha + Validade SSH",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{apiKey}}",
+                "type": "text"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"password\": \"nova_senha123\",\n  \"validate\": 90\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/ssh_user/usuario1",
+              "host": ["{{baseUrl}}"],
+              "path": ["ssh_user", "usuario1"]
+            },
+            "description": "Atualiza senha e validade num único request. Retorna array com resultado de cada operação."
           }
         },
         {
@@ -357,7 +367,7 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "[\n  {\n    \"uuid\": \"550e8400-e29b-41d4-a716-446655440000\",\n    \"expiration_date\": \"2024-12-31T23:59:59Z\"\n  },\n  {\n    \"uuid\": \"550e8400-e29b-41d4-a716-446655440001\",\n    \"expiration_date\": \"2024-06-30T23:59:59Z\"\n  }\n]"
+              "raw": "[\n  {\n    \"uuid\": \"550e8400-e29b-41d4-a716-446655440000\",\n    \"expiration_date\": \"2026-12-31T23:59:59Z\"\n  },\n  {\n    \"uuid\": \"550e8400-e29b-41d4-a716-446655440001\",\n    \"expiration_date\": \"2026-06-30T23:59:59Z\"\n  }\n]"
             },
             "url": {
               "raw": "{{baseUrl}}/v2ray_user",
@@ -385,7 +395,7 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "[\n  {\n    \"uuid\": \"550e8400-e29b-41d4-a716-446655440002\",\n    \"expiration_date\": \"2024-01-01T23:59:59Z\"\n  }\n]"
+              "raw": "[\n  {\n    \"uuid\": \"550e8400-e29b-41d4-a716-446655440002\",\n    \"expiration_date\": \"2026-03-01T23:59:59Z\"\n  }\n]"
             },
             "url": {
               "raw": "{{baseUrl}}/v2ray/test",
@@ -460,7 +470,7 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"expiration_date\": \"2024-12-31T23:59:59Z\"\n}"
+              "raw": "{\n  \"expiration_date\": \"2026-12-31T23:59:59Z\"\n}"
             },
             "url": {
               "raw": "{{baseUrl}}/v2ray_user/enable/550e8400-e29b-41d4-a716-446655440000",

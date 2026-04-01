@@ -13,8 +13,8 @@ import (
 )
 
 const (
-	CRONJOB_DIR  = "/root/dragoncore/temp"
-	CRONJOB_FILE = "/root/dragoncore/temp/cronjobs.json"
+	CRONJOB_DIR  = "/root/sentinel/temp"
+	CRONJOB_FILE = "/root/sentinel/temp/cronjobs.json"
 )
 
 // CronjobService gerencia os cronjobs da aplicação
