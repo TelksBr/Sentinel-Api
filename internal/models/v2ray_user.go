@@ -7,6 +7,9 @@ import (
 	"github.com/go-playground/validator/v10"
 )
 
+// Singleton validator — thread-safe, reutilizável
+var v2rayValidate = validator.New()
+
 // V2RayUser representa um usuário V2Ray
 type V2RayUser struct {
 	UUID           string `json:"uuid" validate:"required,uuid4"`
@@ -24,13 +27,13 @@ type V2RayUserResponse struct {
 
 // V2RayUserCreateResponse representa a resposta de criação de usuários V2Ray
 type V2RayUserCreateResponse struct {
-	Error   bool                 `json:"error"`
-	Message string               `json:"message"`
-	Users   []V2RayUserResponse  `json:"users"`
-	TotalBefore int              `json:"total_before,omitempty"`
-	TotalDeleted int             `json:"total_deleted,omitempty"`
-	TotalAfter int               `json:"total_after,omitempty"`
-	NotDeleted []V2RayUserResponse `json:"not_deleted,omitempty"`
+	Error        bool                `json:"error"`
+	Message      string              `json:"message"`
+	Users        []V2RayUserResponse `json:"users"`
+	TotalBefore  int                 `json:"total_before,omitempty"`
+	TotalDeleted int                 `json:"total_deleted,omitempty"`
+	TotalAfter   int                 `json:"total_after,omitempty"`
+	NotDeleted   []V2RayUserResponse `json:"not_deleted,omitempty"`
 }
 
 // V2RayUserDeleteRequest representa a requisição de deleção V2Ray
@@ -50,33 +53,27 @@ type V2RayUserEnableRequest struct {
 
 // Validate valida a estrutura V2RayUser
 func (u *V2RayUser) Validate() error {
-	validate := validator.New()
-
 	// Validação adicional para data de expiração
 	if _, err := time.Parse(time.RFC3339, u.ExpirationDate); err != nil {
 		return fmt.Errorf("parsing time \"%s\" as \"%s\": cannot parse \"%s\" as \"%s\"",
 			u.ExpirationDate, time.RFC3339, u.ExpirationDate, "2006")
 	}
 
-	return validate.Struct(u)
+	return v2rayValidate.Struct(u)
 }
 
 // Validate valida a estrutura V2RayUserDeleteRequest
 func (r *V2RayUserDeleteRequest) Validate() error {
-	validate := validator.New()
-	return validate.Struct(r)
+	return v2rayValidate.Struct(r)
 }
 
 // Validate valida a estrutura V2RayUserUpdateRequest
 func (r *V2RayUserUpdateRequest) Validate() error {
-	validate := validator.New()
-	return validate.Struct(r)
+	return v2rayValidate.Struct(r)
 }
 
 // Validate valida a estrutura V2RayUserEnableRequest
 func (r *V2RayUserEnableRequest) Validate() error {
-	validate := validator.New()
-
 	// Validação adicional para data de expiração se fornecida
 	if r.ExpirationDate != nil && *r.ExpirationDate != "" {
 		if _, err := time.Parse(time.RFC3339, *r.ExpirationDate); err != nil {
@@ -85,7 +82,7 @@ func (r *V2RayUserEnableRequest) Validate() error {
 		}
 	}
 
-	return validate.Struct(r)
+	return v2rayValidate.Struct(r)
 }
 
 // GetExpirationTime retorna o tempo de expiração como time.Time
@@ -99,25 +96,25 @@ func (u *V2RayUser) IsExpired() bool {
 	if err != nil {
 		return true // Se não conseguir parsear, considera expirado
 	}
-	
+
 	// Comparar até os minutos (como na implementação original)
 	now := time.Now()
-	return expirationTime.Truncate(time.Minute).Before(now.Truncate(time.Minute)) || 
-		   expirationTime.Truncate(time.Minute).Equal(now.Truncate(time.Minute))
+	return expirationTime.Truncate(time.Minute).Before(now.Truncate(time.Minute)) ||
+		expirationTime.Truncate(time.Minute).Equal(now.Truncate(time.Minute))
 }
 
 // GenerateEmail gera um email determinístico baseado no UUID
 func (u *V2RayUser) GenerateEmail() string {
 	domains := []string{"gmail.com", "yahoo.com", "outlook.com", "protonmail.com"}
 	username := u.UUID[:8] // Usa primeira parte do UUID
-	
+
 	// Calcula índice do domínio baseado no UUID
 	hash := 0
 	for _, char := range u.UUID {
 		hash += int(char)
 	}
 	domainIndex := hash % len(domains)
-	
+
 	return "v2ray_" + username + "@" + domains[domainIndex]
 }
 

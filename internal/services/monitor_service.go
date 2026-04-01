@@ -32,6 +32,9 @@ type MonitorService struct {
 	v2rayLogPaths  []string
 	currentLogPath string
 
+	// Caminho do config V2Ray (injetado)
+	v2rayConfigPath string
+
 	// Cache com TTL para evitar leituras excessivas
 	cacheExpiry   time.Time
 	cacheDuration time.Duration
@@ -40,19 +43,20 @@ type MonitorService struct {
 }
 
 // NewMonitorService cria uma nova instância do serviço de monitoramento
-func NewMonitorService() *MonitorService {
+func NewMonitorService(v2rayConfigPath string) *MonitorService {
 	// Pre-compilar regex para extração de logs V2Ray (evita recompilação a cada linha)
 	v2rayLogRegex := regexp.MustCompile(`(\d{4}\/\d{2}\/\d{2} \d{2}:\d{2}:\d{2}).*?(accepted|rejected).*?email:\s*([\w._%+-]+@[\w.-]+\.[a-zA-Z]{2,})`)
 
 	return &MonitorService{
-		sshUsers:       0,
-		v2rayUsers:     0,
-		stopChan:       make(chan bool),
-		v2rayUUIDCache: make(map[string]string, 100),        // Pre-alocar para ~100 usuários
-		sshUsersList:   make([]models.SSHUserOnline, 0, 50), // Pre-alocar slices
-		v2rayUsersList: make([]models.V2RayUserOnline, 0, 100),
-		cacheDuration:  10 * time.Second, // Cache de 10s para reduzir leituras de arquivo
-		v2rayLogRegex:  v2rayLogRegex,    // Regex pre-compilado
+		sshUsers:        0,
+		v2rayUsers:      0,
+		stopChan:        make(chan bool),
+		v2rayUUIDCache:  make(map[string]string, 100),
+		sshUsersList:    make([]models.SSHUserOnline, 0, 50),
+		v2rayUsersList:  make([]models.V2RayUserOnline, 0, 100),
+		cacheDuration:   10 * time.Second,
+		v2rayLogRegex:   v2rayLogRegex,
+		v2rayConfigPath: v2rayConfigPath,
 		v2rayLogPaths: []string{
 			"/var/log/xray/access.log",
 			"/usr/local/etc/xray/access.log",
@@ -161,10 +165,9 @@ func (m *MonitorService) findV2RayLogFile() {
 
 // loadV2RayUUIDCache carrega o cache de UUIDs do arquivo de configuração V2Ray
 func (m *MonitorService) loadV2RayUUIDCache() {
-	configPath := "/usr/local/etc/xray/config.json"
-	content, err := os.ReadFile(configPath)
+	content, err := os.ReadFile(m.v2rayConfigPath)
 	if err != nil {
-		log.Printf("❌ Erro ao ler arquivo de configuração V2Ray: %v", err)
+		log.Printf("❌ Erro ao ler arquivo de configuração V2Ray (%s): %v", m.v2rayConfigPath, err)
 		return
 	}
 
@@ -528,7 +531,6 @@ func (m *MonitorService) performV2RayLogCleanup() {
 		return
 	}
 
-	// Otimização: Pre-alocar slice com capacidade estimada (80% das linhas)
 	lines := strings.Split(string(content), "\n")
 	estimatedKeep := int(float64(len(lines)) * 0.8)
 	newLogContent := make([]string, 0, estimatedKeep)
@@ -536,10 +538,10 @@ func (m *MonitorService) performV2RayLogCleanup() {
 
 	for _, line := range lines {
 		if len(line) < 26 {
-			continue // Ignorar linhas muito curtas
+			continue
 		}
 
-		tsStr := line[:26] // Exemplo: 2025/05/13 11:40:35.308557
+		tsStr := line[:26]
 		ts, err := time.ParseInLocation("2006/01/02 15:04:05.000000", tsStr, time.Local)
 		if err != nil {
 			newLogContent = append(newLogContent, line)
@@ -555,12 +557,20 @@ func (m *MonitorService) performV2RayLogCleanup() {
 		}
 	}
 
-	err = os.WriteFile(m.currentLogPath, []byte(strings.Join(newLogContent, "\n")), 0644)
-	if err != nil {
-		log.Printf("❌ Erro ao escrever arquivo de log V2Ray após limpeza: %v", err)
-	} else {
-		log.Printf("✅ Limpeza de logs V2Ray concluída: %d linhas removidas, %d mantidas", removed, kept)
+	// Escrever em arquivo temporário e rename atômico para minimizar data loss
+	tmpPath := m.currentLogPath + ".cleanup.tmp"
+	if err := os.WriteFile(tmpPath, []byte(strings.Join(newLogContent, "\n")), 0644); err != nil {
+		log.Printf("❌ Erro ao escrever tmp de limpeza: %v", err)
+		return
 	}
+
+	if err := os.Rename(tmpPath, m.currentLogPath); err != nil {
+		log.Printf("❌ Erro ao renomear arquivo de log após limpeza: %v", err)
+		os.Remove(tmpPath)
+		return
+	}
+
+	log.Printf("✅ Limpeza de logs V2Ray concluída: %d linhas removidas, %d mantidas", removed, kept)
 }
 
 // extractUserFromLog extrai o email do log do V2Ray

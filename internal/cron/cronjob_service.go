@@ -4,7 +4,9 @@ import (
 	"api-v2/internal/services"
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
+	"sync"
 	"time"
 
 	"github.com/robfig/cron/v3"
@@ -20,6 +22,7 @@ type CronjobService struct {
 	cron         *cron.Cron
 	sshService   *services.SSHService
 	v2rayService *services.V2RayService
+	fileMutex    sync.Mutex // protege leitura/escrita do arquivo cronjobs.json
 }
 
 // NewCronjobService cria uma nova instância do serviço de cronjobs
@@ -54,7 +57,7 @@ func (cs *CronjobService) Start() error {
 	}
 
 	cs.cron.Start()
-	fmt.Println("Serviço de cronjobs iniciado.")
+	log.Println("Serviço de cronjobs iniciado.")
 	return nil
 }
 
@@ -99,13 +102,16 @@ func (cs *CronjobService) AddV2RayCronjob(id, execTimeISO string) error {
 	return cs.addCronjob(cronjob)
 }
 
-// executeTestUserCronjobs executa cronjobs de usuários de teste
+// executeTestUserCronjobs executa cronjobs de usuários de teste (thread-safe)
 func (cs *CronjobService) executeTestUserCronjobs() {
-	fmt.Printf("[%s] Executando cronjobs de usuários teste...\n", time.Now().Format(time.RFC3339))
+	cs.fileMutex.Lock()
+	defer cs.fileMutex.Unlock()
+
+	log.Printf("Executando cronjobs de usuários teste...")
 
 	cronjobs, err := cs.loadCronjobs()
 	if err != nil {
-		fmt.Printf("Erro ao carregar cronjobs: %v\n", err)
+		log.Printf("Erro ao carregar cronjobs: %v", err)
 		return
 	}
 
@@ -124,7 +130,7 @@ func (cs *CronjobService) executeTestUserCronjobs() {
 		// Validar e parsear tempo de execução
 		execTime, err := time.Parse(time.RFC3339, job.ExecTime)
 		if err != nil {
-			fmt.Printf("❌ Cronjob inválido removido - ID: %s, Tipo: %s, ExecTime: %s, Erro: %v\n",
+			log.Printf("❌ Cronjob inválido removido - ID: %s, Tipo: %s, ExecTime: %s, Erro: %v",
 				job.ID, job.Type, job.ExecTime, err)
 			invalidCount++
 			continue // Pular este cronjob inválido
@@ -134,7 +140,7 @@ func (cs *CronjobService) executeTestUserCronjobs() {
 		minTime := time.Now().AddDate(-1, 0, 0) // 1 ano atrás
 		maxTime := time.Now().AddDate(1, 0, 0)  // 1 ano à frente
 		if execTime.Before(minTime) || execTime.After(maxTime) {
-			fmt.Printf("❌ Cronjob com data fora do range removido - ID: %s, Tipo: %s, ExecTime: %s\n",
+			log.Printf("❌ Cronjob com data fora do range removido - ID: %s, Tipo: %s, ExecTime: %s",
 				job.ID, job.Type, execTime.Format(time.RFC3339))
 			invalidCount++
 			continue
@@ -144,7 +150,7 @@ func (cs *CronjobService) executeTestUserCronjobs() {
 
 		if execTime.Before(now) || execTime.Equal(now) {
 			if err := cs.executeCronjob(job); err != nil {
-				fmt.Printf("Erro ao executar cronjob %s: %v\n", job.ID, err)
+				log.Printf("Erro ao executar cronjob %s: %v", job.ID, err)
 			} else {
 				job.Executed = true
 				executed = true
@@ -161,9 +167,9 @@ func (cs *CronjobService) executeTestUserCronjobs() {
 
 	// Se encontrou entradas inválidas, salvar arquivo limpo
 	if invalidCount > 0 {
-		fmt.Printf("🧹 Removendo %d cronjob(s) inválido(s) do arquivo...\n", invalidCount)
+		log.Printf("🧹 Removendo %d cronjob(s) inválido(s) do arquivo...", invalidCount)
 		if err := cs.saveCronjobs(validCronjobs); err != nil {
-			fmt.Printf("Erro ao salvar cronjobs após limpeza de inválidos: %v\n", err)
+			log.Printf("Erro ao salvar cronjobs após limpeza de inválidos: %v", err)
 		}
 	}
 
@@ -175,12 +181,12 @@ func (cs *CronjobService) executeTestUserCronjobs() {
 
 // executeExpiredV2RayUsers executa remoção de usuários V2Ray expirados
 func (cs *CronjobService) executeExpiredV2RayUsers() {
-	fmt.Printf("[%s] Iniciando monitoramento de usuários V2Ray expirados...\n", time.Now().Format(time.RFC3339))
+	log.Println("Iniciando monitoramento de usuários V2Ray expirados...")
 
 	if err := cs.v2rayService.RemoveExpiredUsers(); err != nil {
-		fmt.Printf("Erro ao remover usuários V2Ray expirados: %v\n", err)
+		log.Printf("Erro ao remover usuários V2Ray expirados: %v", err)
 	} else {
-		fmt.Printf("[%s] Monitoramento de usuários V2Ray expirados concluído.\n", time.Now().Format(time.RFC3339))
+		log.Println("Monitoramento de usuários V2Ray expirados concluído.")
 	}
 }
 
@@ -193,7 +199,7 @@ func (cs *CronjobService) executeCronjob(job *Cronjob) error {
 		if result.Error {
 			return fmt.Errorf("falha ao deletar usuário SSH %s: %s", job.ID, result.Message)
 		}
-		fmt.Printf("Usuário SSH removido: %s\n", job.ID)
+		log.Printf("Usuário SSH removido: %s", job.ID)
 
 	case "v2ray":
 		// Deletar usuário V2Ray
@@ -201,7 +207,7 @@ func (cs *CronjobService) executeCronjob(job *Cronjob) error {
 		if result.Error {
 			return fmt.Errorf("falha ao deletar usuário V2Ray %s: %s", job.ID, result.Message)
 		}
-		fmt.Printf("Usuário V2Ray removido: %s\n", job.ID)
+		log.Printf("Usuário V2Ray removido: %s", job.ID)
 
 	default:
 		return fmt.Errorf("tipo de cronjob desconhecido: %s", job.Type)
@@ -210,8 +216,11 @@ func (cs *CronjobService) executeCronjob(job *Cronjob) error {
 	return nil
 }
 
-// addCronjob adiciona um cronjob ao arquivo
+// addCronjob adiciona um cronjob ao arquivo (thread-safe)
 func (cs *CronjobService) addCronjob(cronjob Cronjob) error {
+	cs.fileMutex.Lock()
+	defer cs.fileMutex.Unlock()
+
 	cronjobs, err := cs.loadCronjobs()
 	if err != nil {
 		return err
@@ -248,9 +257,10 @@ func (cs *CronjobService) saveCronjobs(cronjobs []Cronjob) error {
 
 // cleanExecutedCronjobs remove cronjobs já executados
 func (cs *CronjobService) cleanExecutedCronjobs() {
+	// NOTA: fileMutex já deve estar adquirido pelo chamador (executeTestUserCronjobs)
 	cronjobs, err := cs.loadCronjobs()
 	if err != nil {
-		fmt.Printf("Erro ao carregar cronjobs para limpeza: %v\n", err)
+		log.Printf("Erro ao carregar cronjobs para limpeza: %v", err)
 		return
 	}
 
@@ -264,6 +274,6 @@ func (cs *CronjobService) cleanExecutedCronjobs() {
 
 	// Salvar apenas os ativos
 	if err := cs.saveCronjobs(activeCronjobs); err != nil {
-		fmt.Printf("Erro ao salvar cronjobs após limpeza: %v\n", err)
+		log.Printf("Erro ao salvar cronjobs após limpeza: %v", err)
 	}
 }

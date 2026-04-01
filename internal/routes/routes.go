@@ -1,6 +1,8 @@
 package routes
 
 import (
+	"time"
+
 	"api-v2/internal/cron"
 	"api-v2/internal/handlers"
 	"api-v2/internal/middleware"
@@ -17,17 +19,22 @@ func SetupRoutes(sshService *services.SSHService, v2rayService *services.V2RaySe
 	r.Use(gin.Logger())
 	r.Use(gin.Recovery())
 
+	// Rate limiter global: 60 requests/min por IP
+	rateLimiter := middleware.NewRateLimiter(60, 1*time.Minute)
+	r.Use(rateLimiter.Middleware())
+
 	// Handlers
 	sshHandlers := handlers.NewSSHHandlers(sshService, cronService)
 	v2rayHandlers := handlers.NewV2RayHandlers(v2rayService, cronService)
 	monitorHandlers := handlers.NewMonitorHandlers(monitorService)
 
-	// Rota de health check
+	// Rota de health check (pública)
 	r.GET("/", func(c *gin.Context) {
 		c.JSON(200, gin.H{"message": "🟢 API running !"})
 	})
 
-	// Rotas públicas (sem autenticação)
+	// Rotas públicas (sem autenticação) — mantidas públicas para evitar
+	// exposição do token em frontends com hardcode
 	r.GET("/onlines", monitorHandlers.GetOnlineUsers)              // GET /onlines
 	r.GET("/system/resources", monitorHandlers.GetSystemResources) // GET /system/resources
 

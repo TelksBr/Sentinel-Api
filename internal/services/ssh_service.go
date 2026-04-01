@@ -2,6 +2,7 @@ package services
 
 import (
 	"fmt"
+	"log"
 	"os"
 	"time"
 
@@ -26,7 +27,7 @@ func NewSSHService() *SSHService {
 // CreateUsers cria usuários SSH
 func (s *SSHService) CreateUsers(users []models.SSHUser) models.SSHUserCreateResponse {
 	results := []models.SSHUserResponse{}
-	fmt.Printf("[%s] - Iniciando criação de usuários SSH.\n", time.Now().Format(time.RFC3339))
+	log.Printf("Iniciando criação de usuários SSH.")
 
 	for _, user := range users {
 		result := s.createSingleUser(user)
@@ -143,9 +144,9 @@ func (s *SSHService) CreateTestUser(request models.SSHUserTestRequest, cronServi
 	if result.Success {
 		err := cronService.AddTestCronjob(request.Username, "ssh", request.Time)
 		if err != nil {
-			fmt.Printf("Erro ao agendar remoção de usuário teste %s: %v\n", request.Username, err)
+			log.Printf("Erro ao agendar remoção de usuário teste %s: %v", request.Username, err)
 		} else {
-			fmt.Printf("Usuário teste %s criado e agendado para remoção em %d horas\n", request.Username, request.Time)
+			log.Printf("Usuário teste %s criado e agendado para remoção em %d horas", request.Username, request.Time)
 		}
 	}
 
@@ -488,7 +489,7 @@ func (s *SSHService) EnableUser(username string, days *int) models.SSHUserRespon
 // DeleteAllUsers deleta todos os usuários SSH (exceto usuários reservados)
 // Usa a função ListSSHUsers para obter a lista e depois chama DeleteUsers para cada um
 func (s *SSHService) DeleteAllUsers() models.SSHUserCreateResponse {
-	fmt.Printf("[%s] - Iniciando deleção de todos os usuários SSH.\n", time.Now().Format(time.RFC3339))
+	log.Println("Iniciando deleção de todos os usuários SSH.")
 
 	// Listar todos os usuários SSH criados
 	usernames, err := utils.ListSSHUsers()
@@ -530,7 +531,7 @@ func (s *SSHService) DeleteAllUsers() models.SSHUserCreateResponse {
 		}
 	}
 
-	fmt.Printf("[%s] - Encontrados %d usuários SSH para deletar.\n", time.Now().Format(time.RFC3339), len(usernames))
+	log.Printf("Encontrados %d usuários SSH para deletar.", len(usernames))
 
 	// Usar a função DeleteUsers existente que já tem toda a lógica sofisticada
 	// de desativar usuários, matar processos forçadamente e deletar

@@ -7,6 +7,7 @@ import (
 	"api-v2/internal/cron"
 	"api-v2/internal/models"
 	"api-v2/internal/services"
+
 	"github.com/gin-gonic/gin"
 )
 
@@ -83,22 +84,52 @@ func (h *SSHHandlers) UpdateUser(c *gin.Context) {
 	}
 
 	var result models.SSHUserResponse
+	var results []models.SSHUserResponse
 
 	if updateRequest.Password != nil {
 		result = h.sshService.UpdatePassword(username, *updateRequest.Password)
-	} else if updateRequest.ValidateDays != nil {
+		results = append(results, result)
+	}
+
+	if updateRequest.ValidateDays != nil {
 		result = h.sshService.UpdateValidate(username, *updateRequest.ValidateDays)
-	} else {
+		results = append(results, result)
+	}
+
+	if len(results) == 0 {
 		HandleBadRequest(c, "Nenhum parâmetro de atualização válido fornecido.")
 		return
 	}
 
+	// Se só uma operação, retornar formato original para compatibilidade
+	if len(results) == 1 {
+		status := http.StatusOK
+		if !results[0].Success {
+			status = http.StatusBadRequest
+		}
+		c.JSON(status, results[0])
+		return
+	}
+
+	// Múltiplas operações: verificar se todas tiveram sucesso
+	allSuccess := true
+	for _, r := range results {
+		if !r.Success {
+			allSuccess = false
+			break
+		}
+	}
+
 	status := http.StatusOK
-	if !result.Success {
+	if !allSuccess {
 		status = http.StatusBadRequest
 	}
 
-	c.JSON(status, result)
+	c.JSON(status, gin.H{
+		"username": username,
+		"success":  allSuccess,
+		"details":  results,
+	})
 }
 
 // DeleteUsers deleta usuários SSH

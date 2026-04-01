@@ -129,76 +129,65 @@ func CreateUser(username, password, expirationDate string) error {
 	return ExecuteCommandQuiet("useradd", "-e", expirationDate, "-M", "-s", "/bin/false", "-p", hashedPassword, username)
 }
 
+// sanitizeUsername valida que o username contém apenas caracteres seguros (padrão POSIX)
+// DEVE ser chamado ANTES de qualquer uso em comandos do sistema
+func sanitizeUsername(username string) error {
+	if len(username) == 0 || len(username) > 32 {
+		return fmt.Errorf("username com tamanho inválido: %d", len(username))
+	}
+	for _, c := range username {
+		if !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_' || c == '-' || c == '.') {
+			return fmt.Errorf("username contém caracteres inválidos: %s", username)
+		}
+	}
+	return nil
+}
+
 // KillUserProcesses mata todos os processos de um usuário incluindo sessões SSH
-// Implementação melhorada para garantir fechamento instantâneo de tunnels SSH
+// Usa pkill direto (sem bash -c) para evitar command injection
 func KillUserProcesses(username string) error {
-	// 1. Matar processos sshd específicos do usuário primeiro (compatível com sistemas sem xargs -r)
-	// Encontrar e matar processos sshd que estão associados ao usuário
-	ExecuteCommandQuiet("bash", "-c", fmt.Sprintf("ps aux | grep '[s]shd.*%s' | awk '{print $2}' | xargs kill 2>/dev/null || true", username))
+	if err := sanitizeUsername(username); err != nil {
+		return err
+	}
 
-	// 2. Matar processos sshd do usuário usando pgrep mais específico
-	ExecuteCommandQuiet("bash", "-c", fmt.Sprintf("pgrep -u %s -f sshd | xargs kill 2>/dev/null || true", username))
-
-	// 3. Matar todos os processos do usuário (incluindo filhos de sshd)
+	// 1. Matar processos do usuário graciosamente (SIGTERM)
 	ExecuteCommandQuiet("pkill", "-u", username)
 
-	// Aguardar um pouco para processos terminarem graciosamente
+	// Aguardar processos terminarem graciosamente
 	time.Sleep(1 * time.Second)
 
-	// 4. Forçar kill em processos sshd restantes
-	ExecuteCommandQuiet("bash", "-c", fmt.Sprintf("ps aux | grep '[s]shd.*%s' | awk '{print $2}' | xargs kill -9 2>/dev/null || true", username))
-	ExecuteCommandQuiet("bash", "-c", fmt.Sprintf("pgrep -u %s -f sshd | xargs kill -9 2>/dev/null || true", username))
-
-	// 5. Matar processos sshd por padrão de comando (sshd: username@)
-	ExecuteCommandQuiet("bash", "-c", fmt.Sprintf("ps aux | grep -E 'sshd: %s@|sshd.*%s' | grep -v grep | awk '{print $2}' | xargs kill -9 2>/dev/null || true", username, username))
-
-	// 6. Forçar kill em todos os processos restantes do usuário
+	// 2. Forçar kill em todos os processos restantes (SIGKILL)
 	ExecuteCommandQuiet("pkill", "-KILL", "-u", username)
 
 	return nil
 }
 
-// KillUserProcessesForced mata todos os processos de um usuário de forma mais agressiva
+// KillUserProcessesForced mata todos os processos de um usuário de forma agressiva (SIGKILL direto)
 // Usado durante deleção de usuários para garantir que todos os processos sejam mortos
 func KillUserProcessesForced(username string) error {
-	// 1. Matar processos sshd específicos do usuário (compatível)
-	ExecuteCommandQuiet("bash", "-c", fmt.Sprintf("ps aux | grep '[s]shd.*%s' | awk '{print $2}' | xargs kill -9 2>/dev/null || true", username))
-	ExecuteCommandQuiet("bash", "-c", fmt.Sprintf("pgrep -u %s -f sshd | xargs kill -9 2>/dev/null || true", username))
+	if err := sanitizeUsername(username); err != nil {
+		return err
+	}
 
-	// 2. Matar processos sshd por padrão de comando (sshd: username@)
-	ExecuteCommandQuiet("bash", "-c", fmt.Sprintf("ps aux | grep -E 'sshd: %s@|sshd.*%s' | grep -v grep | awk '{print $2}' | xargs kill -9 2>/dev/null || true", username, username))
-
-	// 3. Usar kill -9 com pgrep para todos os processos (igual ao V1)
-	ExecuteCommandQuiet("bash", "-c", fmt.Sprintf("kill -9 $(pgrep -u %s) 2>/dev/null || true", username))
-
-	// 4. Última tentativa: matar qualquer processo sshd relacionado ao usuário
-	ExecuteCommandQuiet("bash", "-c", fmt.Sprintf("pids=$(ps aux | grep -E '[s]shd.*%s|sshd: %s@' | awk '{print $2}'); [ -n \"$pids\" ] && kill -9 $pids 2>/dev/null || true", username, username))
+	// Matar todos os processos do usuário com SIGKILL direto (sem bash -c)
+	ExecuteCommandQuiet("pkill", "-KILL", "-u", username)
 
 	return nil
 }
 
-// HasUserProcesses verifica se existem processos do usuário (incluindo sshd)
+// HasUserProcesses verifica se existem processos do usuário
 func HasUserProcesses(username string) (bool, error) {
-	// Verificar processos normais
-	output, err := ExecuteCommand("ps", "-u", username, "-o", "pid=")
+	if err := sanitizeUsername(username); err != nil {
+		return false, err
+	}
+
+	// Usar pgrep diretamente (sem bash -c) — retorna exit 0 se encontrar processos
+	err := ExecuteCommandQuiet("pgrep", "-u", username)
 	if err != nil {
-		// Se falhar, tentar método alternativo
-		output, err = ExecuteCommand("bash", "-c", fmt.Sprintf("pgrep -u %s || true", username))
-		if err != nil {
-			return false, err
-		}
+		// pgrep retorna exit 1 se não encontrar processos
+		return false, nil
 	}
-	if strings.TrimSpace(output) != "" {
-		return true, nil
-	}
-
-	// Verificar processos sshd específicos
-	sshdOutput, err := ExecuteCommand("bash", "-c", fmt.Sprintf("ps aux | grep '[s]shd.*%s' | awk '{print $2}' || true", username))
-	if err == nil && strings.TrimSpace(sshdOutput) != "" {
-		return true, nil
-	}
-
-	return false, nil
+	return true, nil
 }
 
 // GetUserExpirationDate obtém a data de expiração atual do usuário
@@ -551,12 +540,8 @@ func ListSSHUsers() ([]string, error) {
 			continue
 		}
 
-		// Verificar se o usuário existe e não é reservado
 		if !IsReservedUsername(username) {
-			exists, err := CheckUserExists(username)
-			if err == nil && exists {
-				users = append(users, username)
-			}
+			users = append(users, username)
 		}
 	}
 

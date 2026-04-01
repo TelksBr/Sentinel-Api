@@ -1,0 +1,20 @@
+# Binários
+build/
+*.exe
+
+# Logs e dados
+logs/
+data/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Env
+.env

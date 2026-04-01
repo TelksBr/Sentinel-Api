@@ -2,10 +2,12 @@ package handlers
 
 import (
 	"net/http"
+	"strconv"
 
 	"api-v2/internal/cron"
 	"api-v2/internal/models"
 	"api-v2/internal/services"
+
 	"github.com/gin-gonic/gin"
 )
 
@@ -38,7 +40,7 @@ func (h *V2RayHandlers) CreateUsers(c *gin.Context) {
 				{
 					Field:   "users",
 					Tag:     "validation",
-					Value:   string(rune(i)),
+					Value:   strconv.Itoa(i),
 					Message: err.Error(),
 				},
 			})
@@ -99,7 +101,7 @@ func (h *V2RayHandlers) CreateTestUser(c *gin.Context) {
 				{
 					Field:   "users",
 					Tag:     "validation",
-					Value:   string(rune(i)),
+					Value:   strconv.Itoa(i),
 					Message: err.Error(),
 				},
 			})

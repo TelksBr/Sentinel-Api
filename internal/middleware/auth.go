@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"crypto/subtle"
 	"fmt"
 	"net/http"
 	"os"
@@ -33,9 +34,19 @@ func (a *AuthMiddleware) Middleware() gin.HandlerFunc {
 			return
 		}
 
-		// Verificar se o token corresponde à variável de ambiente
-		expectedToken := "Bearer " + a.apiKey
-		if authToken != expectedToken {
+		// Verificar prefixo Bearer
+		const bearerPrefix = "Bearer "
+		if len(authToken) < len(bearerPrefix) || authToken[:len(bearerPrefix)] != bearerPrefix {
+			c.JSON(http.StatusUnauthorized, models.NewErrorResponse("Token de autorização inválido"))
+			c.Abort()
+			return
+		}
+
+		// Extrair token sem o prefixo
+		providedKey := authToken[len(bearerPrefix):]
+
+		// Comparação constant-time — imune a timing attacks
+		if subtle.ConstantTimeCompare([]byte(providedKey), []byte(a.apiKey)) != 1 {
 			c.JSON(http.StatusUnauthorized, models.NewErrorResponse("Token de autorização inválido"))
 			c.Abort()
 			return

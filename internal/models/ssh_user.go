@@ -7,14 +7,17 @@ import (
 	"github.com/go-playground/validator/v10"
 )
 
+// Singleton validator — thread-safe, reutilizável
+var sshValidate = validator.New()
+
 // SSHUser representa um usuário SSH
 type SSHUser struct {
-	Username string `json:"username" validate:"required,min=3,max=32,alphanum"`
-	Password string `json:"password" validate:"required,min=4"`
-	Limit    int    `json:"limit" validate:"min=0"`
+	Username     string `json:"username" validate:"required,min=3,max=32,alphanum"`
+	Password     string `json:"password" validate:"required,min=4"`
+	Limit        int    `json:"limit" validate:"min=0"`
 	ValidateDays int    `json:"validate" validate:"required,min=1"`
-	IsTest   bool   `json:"is_test"`
-	Time     int    `json:"time" validate:"min=0"` // Tempo em horas para cronjob
+	IsTest       bool   `json:"is_test"`
+	Time         int    `json:"time" validate:"min=0"` // Tempo em horas para cronjob
 }
 
 // SSHUserResponse representa a resposta de operações SSH
@@ -26,13 +29,13 @@ type SSHUserResponse struct {
 
 // SSHUserCreateResponse representa a resposta de criação de usuários SSH
 type SSHUserCreateResponse struct {
-	Error   bool               `json:"error"`
-	Message string             `json:"message"`
-	Details []SSHUserResponse  `json:"details"`
-	TotalBefore int            `json:"total_before,omitempty"`
-	TotalDeleted int           `json:"total_deleted,omitempty"`
-	TotalAfter int             `json:"total_after,omitempty"`
-	NotDeleted []SSHUserResponse `json:"not_deleted,omitempty"`
+	Error        bool              `json:"error"`
+	Message      string            `json:"message"`
+	Details      []SSHUserResponse `json:"details"`
+	TotalBefore  int               `json:"total_before,omitempty"`
+	TotalDeleted int               `json:"total_deleted,omitempty"`
+	TotalAfter   int               `json:"total_after,omitempty"`
+	NotDeleted   []SSHUserResponse `json:"not_deleted,omitempty"`
 }
 
 // SSHUserTestRequest representa a requisição de teste SSH
@@ -55,14 +58,12 @@ type SSHUserEnableRequest struct {
 
 // Validate valida a estrutura SSHUser
 func (u *SSHUser) Validate() error {
-	validate := validator.New()
-	return validate.Struct(u)
+	return sshValidate.Struct(u)
 }
 
 // Validate valida a estrutura SSHUserTestRequest
 func (r *SSHUserTestRequest) Validate() error {
-	validate := validator.New()
-	return validate.Struct(r)
+	return sshValidate.Struct(r)
 }
 
 // Validate valida a estrutura SSHUserUpdateRequest
@@ -81,8 +82,7 @@ func (r *SSHUserUpdateRequest) Validate() error {
 
 // Validate valida a estrutura SSHUserEnableRequest
 func (r *SSHUserEnableRequest) Validate() error {
-	validate := validator.New()
-	return validate.Struct(r)
+	return sshValidate.Struct(r)
 }
 
 // GetExpirationDate calcula a data de expiração baseada nos dias de validade
@@ -99,7 +99,7 @@ func (u *SSHUser) GetTestExpirationDate() time.Time {
 func (u *SSHUser) IsReservedUsername() bool {
 	reserved := []string{"root", "admin", "sshd", "www-data", "postgres", "mysql", "nginx", "apache"}
 	username := u.Username
-	
+
 	for _, reservedName := range reserved {
 		if username == reservedName {
 			return true

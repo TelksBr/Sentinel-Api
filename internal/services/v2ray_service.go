@@ -383,6 +383,11 @@ func (s *V2RayService) getConfigPath() string {
 	return s.configPath
 }
 
+// GetConfigPath retorna o caminho do config.json detectado (público)
+func (s *V2RayService) GetConfigPath() string {
+	return s.getConfigPath()
+}
+
 // loadConfigBytes lê o JSON como bytes preservando ordem original
 func (s *V2RayService) loadConfigBytes() ([]byte, error) {
 	configPath := s.getConfigPath()
