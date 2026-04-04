@@ -16,14 +16,16 @@ import (
 
 // MonitorService implementa o serviço de monitoramento de usuários online
 type MonitorService struct {
-	sshUsers   int
-	v2rayUsers int
-	mutex      sync.RWMutex
-	stopChan   chan bool
+	sshUsers    int
+	v2rayUsers  int
+	dtProtoUsers int
+	mutex         sync.RWMutex
+	stopChan      chan bool
 
 	// Cache detalhado de usuários online
-	sshUsersList   []models.SSHUserOnline
-	v2rayUsersList []models.V2RayUserOnline
+	sshUsersList    []models.SSHUserOnline
+	v2rayUsersList  []models.V2RayUserOnline
+	dtProtoUsersList []models.DTProtoUserOnline
 
 	// Cache de UUIDs V2Ray (email -> uuid) - pre-alocado
 	v2rayUUIDCache map[string]string
@@ -50,10 +52,12 @@ func NewMonitorService(v2rayConfigPath string) *MonitorService {
 	return &MonitorService{
 		sshUsers:        0,
 		v2rayUsers:      0,
+		dtProtoUsers:    0,
 		stopChan:        make(chan bool),
 		v2rayUUIDCache:  make(map[string]string, 100),
 		sshUsersList:    make([]models.SSHUserOnline, 0, 50),
 		v2rayUsersList:  make([]models.V2RayUserOnline, 0, 100),
+		dtProtoUsersList: make([]models.DTProtoUserOnline, 0, 100),
 		cacheDuration:   10 * time.Second,
 		v2rayLogRegex:   v2rayLogRegex,
 		v2rayConfigPath: v2rayConfigPath,
@@ -81,6 +85,7 @@ func (m *MonitorService) Start() {
 	// Iniciar goroutines de monitoramento
 	go m.monitorSSHUsers()
 	go m.monitorV2RayUsers()
+	go m.monitorDTProtoUsers()
 	go m.cleanV2RayLogs()
 	go m.reloadV2RayUUIDCache()
 
@@ -109,16 +114,17 @@ func (m *MonitorService) GetOnlineUsers() models.OnlineUsersResponse {
 	// Verificar se o cache ainda é válido
 	if time.Now().Before(m.cacheExpiry) {
 		defer m.mutex.RUnlock()
-		return models.NewOnlineUsersResponse(m.sshUsers, m.v2rayUsers)
+		return models.NewOnlineUsersResponse(m.sshUsers, m.v2rayUsers, m.dtProtoUsers)
 	}
 	m.mutex.RUnlock()
 
 	// Cache expirado, atualizar
 	m.updateV2RayUsers()
+	m.updateDTProtoUsers()
 
 	m.mutex.RLock()
 	defer m.mutex.RUnlock()
-	return models.NewOnlineUsersResponse(m.sshUsers, m.v2rayUsers)
+	return models.NewOnlineUsersResponse(m.sshUsers, m.v2rayUsers, m.dtProtoUsers)
 }
 
 // GetDetailedOnlineUsers retorna a lista detalhada de usuários online do cache
@@ -131,24 +137,33 @@ func (m *MonitorService) GetDetailedOnlineUsers() models.DetailedUsersResponse {
 		if v2rayList == nil {
 			v2rayList = []models.V2RayUserOnline{}
 		}
+		dtProtoList := m.dtProtoUsersList
+		if dtProtoList == nil {
+			dtProtoList = []models.DTProtoUserOnline{}
+		}
 		defer m.mutex.RUnlock()
-		return models.NewDetailedUsersResponse(m.sshUsersList, v2rayList)
+		return models.NewDetailedUsersResponse(m.sshUsersList, v2rayList, dtProtoList)
 	}
 	m.mutex.RUnlock()
 
 	// Cache expirado, atualizar
 	m.updateV2RayUsers()
+	m.updateDTProtoUsers()
 
 	m.mutex.RLock()
 	defer m.mutex.RUnlock()
 
-	// Garantir que v2rayUsersList não seja nil
+	// Garantir que slices não sejam nil
 	v2rayList := m.v2rayUsersList
 	if v2rayList == nil {
 		v2rayList = []models.V2RayUserOnline{}
 	}
+	dtProtoList := m.dtProtoUsersList
+	if dtProtoList == nil {
+		dtProtoList = []models.DTProtoUserOnline{}
+	}
 
-	return models.NewDetailedUsersResponse(m.sshUsersList, v2rayList)
+	return models.NewDetailedUsersResponse(m.sshUsersList, v2rayList, dtProtoList)
 }
 
 // findV2RayLogFile encontra o primeiro arquivo de log V2Ray disponível
@@ -273,6 +288,24 @@ func (m *MonitorService) monitorV2RayUsers() {
 		select {
 		case <-ticker.C:
 			m.updateV2RayUsers()
+		case <-m.stopChan:
+			return
+		}
+	}
+}
+
+// monitorDTProtoUsers monitora usuários DT-Proto online (lê stats.json periodicamente)
+func (m *MonitorService) monitorDTProtoUsers() {
+	ticker := time.NewTicker(1 * time.Minute)
+	defer ticker.Stop()
+
+	// Atualizar imediatamente
+	m.updateDTProtoUsers()
+
+	for {
+		select {
+		case <-ticker.C:
+			m.updateDTProtoUsers()
 		case <-m.stopChan:
 			return
 		}
@@ -499,6 +532,50 @@ func (m *MonitorService) updateV2RayUsers() {
 	// Log detalhado para debug
 	log.Printf("📊 Log V2Ray: %s | Total linhas: %d | Timestamps válidos: %d | Emails extraídos: %d | Usuários únicos online: %d",
 		foundLogPath, totalLines, validTimestamps, validUsers, v2rayUsers)
+}
+
+// updateDTProtoUsers atualiza o número e lista de usuários DT-Proto online
+func (m *MonitorService) updateDTProtoUsers() {
+	// Tentar ler o arquivo de stats do DT-Proto
+	statsData, err := os.ReadFile("/var/lib/proto-server/stats.json")
+	if err != nil {
+		log.Printf("❌ Erro ao ler /var/lib/proto-server/stats.json: %v", err)
+		m.mutex.Lock()
+		m.dtProtoUsers = 0
+		m.dtProtoUsersList = []models.DTProtoUserOnline{}
+		m.mutex.Unlock()
+		return
+	}
+
+	// Parse JSON
+	var statsMap map[string]map[string]interface{}
+	if err := json.Unmarshal(statsData, &statsMap); err != nil {
+		log.Printf("❌ Erro ao parsing JSON do DT-Proto: %v", err)
+		m.mutex.Lock()
+		m.dtProtoUsers = 0
+		m.dtProtoUsersList = []models.DTProtoUserOnline{}
+		m.mutex.Unlock()
+		return
+	}
+
+	// Extrair IDs dos usuários online
+	var dtProtoUsersList []models.DTProtoUserOnline
+	for _, userStats := range statsMap {
+		if id, ok := userStats["id"].(string); ok && id != "" {
+			dtProtoUsersList = append(dtProtoUsersList, models.DTProtoUserOnline{
+				ID: id,
+			})
+		}
+	}
+
+	dtProtoUsers := len(dtProtoUsersList)
+
+	m.mutex.Lock()
+	m.dtProtoUsers = dtProtoUsers
+	m.dtProtoUsersList = dtProtoUsersList
+	m.mutex.Unlock()
+
+	log.Printf("🔗 Usuários DT-Proto online: %d", dtProtoUsers)
 }
 
 // cleanV2RayLogs limpa logs V2Ray antigos
