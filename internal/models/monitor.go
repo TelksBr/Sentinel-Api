@@ -4,19 +4,19 @@ import "time"
 
 // OnlineUsersResponse representa a resposta de usuários online
 type OnlineUsersResponse struct {
-	SSHUsers    int `json:"ssh_users"`
-	V2RayUsers  int `json:"v2ray_users"`
+	SSHUsers     int `json:"ssh_users"`
+	V2RayUsers   int `json:"v2ray_users"`
 	DTProtoUsers int `json:"dt_proto_users"`
-	TotalUsers  int `json:"total_users"`
+	TotalUsers   int `json:"total_users"`
 }
 
 // NewOnlineUsersResponse cria uma nova resposta de usuários online
 func NewOnlineUsersResponse(sshUsers, v2rayUsers, dtProtoUsers int) OnlineUsersResponse {
 	return OnlineUsersResponse{
-		SSHUsers:    sshUsers,
-		V2RayUsers:  v2rayUsers,
+		SSHUsers:     sshUsers,
+		V2RayUsers:   v2rayUsers,
 		DTProtoUsers: dtProtoUsers,
-		TotalUsers:  sshUsers + v2rayUsers + dtProtoUsers,
+		TotalUsers:   sshUsers + v2rayUsers + dtProtoUsers,
 	}
 }
 
@@ -44,7 +44,7 @@ type DetailedUsersResponse struct {
 	DTProtoUsers []DTProtoUserOnline `json:"dt_proto_users"`
 	TotalSSH     int                 `json:"total_ssh"`
 	TotalV2Ray   int                 `json:"total_v2ray"`
-	TotalDTProto  int                 `json:"total_dt_proto"`
+	TotalDTProto int                 `json:"total_dt_proto"`
 	TotalUsers   int                 `json:"total_users"`
 }
 
@@ -56,7 +56,7 @@ func NewDetailedUsersResponse(sshUsers []SSHUserOnline, v2rayUsers []V2RayUserOn
 		DTProtoUsers: dtProtoUsers,
 		TotalSSH:     len(sshUsers),
 		TotalV2Ray:   len(v2rayUsers),
-		TotalDTProto:  len(dtProtoUsers),
+		TotalDTProto: len(dtProtoUsers),
 		TotalUsers:   len(sshUsers) + len(v2rayUsers) + len(dtProtoUsers),
 	}
 }
@@ -69,10 +69,10 @@ type SystemResources struct {
 
 // MemoryInfo representa informações de memória
 type MemoryInfo struct {
-	Total       uint64  `json:"total"`        // KB
-	Available   uint64  `json:"available"`    // KB
-	Used        uint64  `json:"used"`         // KB
-	Free        uint64  `json:"free"`         // KB
+	Total        uint64  `json:"total"`         // KB
+	Available    uint64  `json:"available"`     // KB
+	Used         uint64  `json:"used"`          // KB
+	Free         uint64  `json:"free"`          // KB
 	UsagePercent float64 `json:"usage_percent"` // %
 }
 

@@ -16,15 +16,15 @@ import (
 
 // MonitorService implementa o serviço de monitoramento de usuários online
 type MonitorService struct {
-	sshUsers    int
-	v2rayUsers  int
+	sshUsers     int
+	v2rayUsers   int
 	dtProtoUsers int
-	mutex         sync.RWMutex
-	stopChan      chan bool
+	mutex        sync.RWMutex
+	stopChan     chan bool
 
 	// Cache detalhado de usuários online
-	sshUsersList    []models.SSHUserOnline
-	v2rayUsersList  []models.V2RayUserOnline
+	sshUsersList     []models.SSHUserOnline
+	v2rayUsersList   []models.V2RayUserOnline
 	dtProtoUsersList []models.DTProtoUserOnline
 
 	// Cache de UUIDs V2Ray (email -> uuid) - pre-alocado
@@ -50,17 +50,17 @@ func NewMonitorService(v2rayConfigPath string) *MonitorService {
 	v2rayLogRegex := regexp.MustCompile(`(\d{4}\/\d{2}\/\d{2} \d{2}:\d{2}:\d{2}).*?(accepted|rejected).*?email:\s*([\w._%+-]+@[\w.-]+\.[a-zA-Z]{2,})`)
 
 	return &MonitorService{
-		sshUsers:        0,
-		v2rayUsers:      0,
-		dtProtoUsers:    0,
-		stopChan:        make(chan bool),
-		v2rayUUIDCache:  make(map[string]string, 100),
-		sshUsersList:    make([]models.SSHUserOnline, 0, 50),
-		v2rayUsersList:  make([]models.V2RayUserOnline, 0, 100),
+		sshUsers:         0,
+		v2rayUsers:       0,
+		dtProtoUsers:     0,
+		stopChan:         make(chan bool),
+		v2rayUUIDCache:   make(map[string]string, 100),
+		sshUsersList:     make([]models.SSHUserOnline, 0, 50),
+		v2rayUsersList:   make([]models.V2RayUserOnline, 0, 100),
 		dtProtoUsersList: make([]models.DTProtoUserOnline, 0, 100),
-		cacheDuration:   10 * time.Second,
-		v2rayLogRegex:   v2rayLogRegex,
-		v2rayConfigPath: v2rayConfigPath,
+		cacheDuration:    10 * time.Second,
+		v2rayLogRegex:    v2rayLogRegex,
+		v2rayConfigPath:  v2rayConfigPath,
 		v2rayLogPaths: []string{
 			"/var/log/xray/access.log",
 			"/usr/local/etc/xray/access.log",
