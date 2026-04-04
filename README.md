@@ -125,7 +125,7 @@ Verifica se a API está ativa.
 
 #### `GET /onlines`
 
-Retorna contadores de usuários SSH e V2Ray online. Dados em cache com polling em background (SSH: 2min, V2Ray: 90s).
+Retorna contadores de usuários SSH, V2Ray e DT-Proto online. Dados em cache com polling em background (SSH: 2min, V2Ray: 90s, DT-Proto: 1min).
 
 **Autenticação:** Não
 
@@ -134,7 +134,8 @@ Retorna contadores de usuários SSH e V2Ray online. Dados em cache com polling e
 {
   "ssh_users": 5,
   "v2ray_users": 12,
-  "total_users": 17
+  "dt_proto_users": 8,
+  "total_users": 25
 }
 ```
 
@@ -159,9 +160,14 @@ Retorna lista detalhada de usuários online com identificadores.
       "last_connection": "2025-01-15T10:30:00Z"
     }
   ],
+  "dt_proto_users": [
+    { "id": "user123" },
+    { "id": "user456" }
+  ],
   "total_ssh": 1,
   "total_v2ray": 1,
-  "total_users": 2
+  "total_dt_proto": 2,
+  "total_users": 4
 }
 ```
 
@@ -576,6 +582,39 @@ Deleta todos os usuários V2Ray.
 ---
 
 ## Schemas
+
+### OnlineUsersResponse
+
+```json
+{
+  "ssh_users": "int",
+  "v2ray_users": "int",
+  "dt_proto_users": "int",
+  "total_users": "int"
+}
+```
+
+### DTProtoUserOnline
+
+```json
+{
+  "id": "string"
+}
+```
+
+### DetailedUsersResponse
+
+```json
+{
+  "ssh_users": ["SSHUserOnline"],
+  "v2ray_users": ["V2RayUserOnline"],
+  "dt_proto_users": ["DTProtoUserOnline"],
+  "total_ssh": "int",
+  "total_v2ray": "int",
+  "total_dt_proto": "int",
+  "total_users": "int"
+}
+```
 
 ### SSHUserResponse
 

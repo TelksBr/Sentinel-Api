@@ -1,9 +1,9 @@
 {
   "info": {
     "name": "Sentinel API",
-    "description": "Coleção completa da Sentinel API - Gerenciamento de usuários SSH e V2Ray",
+    "description": "Coleção completa da Sentinel API - Gerenciamento de usuários SSH, V2Ray e DT-Proto",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
-    "version": "1.1.0"
+    "version": "1.2.0"
   },
   "variable": [
     {
@@ -41,8 +41,33 @@
           "host": ["{{baseUrl}}"],
           "path": ["onlines"]
         },
-        "description": "Retorna contadores de usuários SSH e V2Ray online (do cache). Rota pública (sem autenticação)."
-      }
+        "description": "Retorna contadores de usuários SSH, V2Ray e DT-Proto online (do cache). Rota pública (sem autenticação)."
+      },
+      "response": [
+        {
+          "name": "Success",
+          "originalRequest": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/onlines",
+              "host": ["{{baseUrl}}"],
+              "path": ["onlines"]
+            }
+          },
+          "status": "OK",
+          "code": 200,
+          "_postman_previewlanguage": "json",
+          "header": [
+            {
+              "key": "Content-Type",
+              "value": "application/json"
+            }
+          ],
+          "cookie": [],
+          "body": "{\n  \"ssh_users\": 5,\n  \"v2ray_users\": 12,\n  \"dt_proto_users\": 8,\n  \"total_users\": 25\n}"
+        }
+      ]
     },
     {
       "name": "Usuários Online (Lista Detalhada)",
@@ -60,7 +85,7 @@
           "host": ["{{baseUrl}}"],
           "path": ["users", "online"]
         },
-        "description": "Retorna lista detalhada de usuários SSH e V2Ray online (do cache)"
+        "description": "Retorna lista detalhada de usuários SSH, V2Ray e DT-Proto online (do cache)"
       },
       "response": [
         {
@@ -75,9 +100,9 @@
               }
             ],
             "url": {
-              "raw": "{{baseUrl}}/",
+              "raw": "{{baseUrl}}/users/online",
               "host": ["{{baseUrl}}"],
-              "path": [""]
+              "path": ["users", "online"]
             }
           },
           "status": "OK",
@@ -90,7 +115,7 @@
             }
           ],
           "cookie": [],
-          "body": "{\n  \"message\": \"🟢 API running !\"\n}"
+          "body": "{\n  \"ssh_users\": [\n    { \"username\": \"usuario1\" }\n  ],\n  \"v2ray_users\": [\n    {\n      \"email\": \"v2ray_550e8400@gmail.com\",\n      \"uuid\": \"550e8400-e29b-41d4-a716-446655440000\",\n      \"last_connection\": \"2025-01-15T10:30:00Z\"\n    }\n  ],\n  \"dt_proto_users\": [\n    { \"id\": \"user123\" },\n    { \"id\": \"user456\" }\n  ],\n  \"total_ssh\": 1,\n  \"total_v2ray\": 1,\n  \"total_dt_proto\": 2,\n  \"total_users\": 4\n}"
         }
       ]
     },
