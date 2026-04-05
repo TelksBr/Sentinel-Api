@@ -539,7 +539,9 @@ func (m *MonitorService) updateDTProtoUsers() {
 	// Tentar ler o arquivo de stats do DT-Proto
 	statsData, err := os.ReadFile("/var/lib/proto-server/stats.json")
 	if err != nil {
-		log.Printf("❌ Erro ao ler /var/lib/proto-server/stats.json: %v", err)
+		if !os.IsNotExist(err) {
+			log.Printf("❌ Erro ao ler /var/lib/proto-server/stats.json: %v", err)
+		}
 		m.mutex.Lock()
 		m.dtProtoUsers = 0
 		m.dtProtoUsersList = []models.DTProtoUserOnline{}
