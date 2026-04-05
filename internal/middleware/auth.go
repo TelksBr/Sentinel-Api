@@ -59,9 +59,9 @@ func (a *AuthMiddleware) Middleware() gin.HandlerFunc {
 
 // GetAPIKeyFromEnv obtém a API key da variável de ambiente
 func GetAPIKeyFromEnv() (string, error) {
-	apiKey := os.Getenv("API_ATLAS_KEY")
+	apiKey := os.Getenv("API_SENTINEL_KEY")
 	if apiKey == "" {
-		return "", fmt.Errorf("variável de ambiente API_ATLAS_KEY não definida")
+		return "", fmt.Errorf("variável de ambiente API_SENTINEL_KEY não definida")
 	}
 	return apiKey, nil
 }

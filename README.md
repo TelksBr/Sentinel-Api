@@ -43,7 +43,7 @@ go mod tidy
 ### Variável de Ambiente Obrigatória
 
 ```bash
-export API_ATLAS_KEY="sua-chave-secreta"
+export API_SENTINEL_KEY="sua-chave-secreta"
 ```
 
 ### Iniciar Servidor
@@ -77,7 +77,7 @@ export API_ATLAS_KEY="sua-chave-secreta"
 Todas as rotas protegidas exigem o header `Authorization` com token Bearer:
 
 ```
-Authorization: Bearer <API_ATLAS_KEY>
+Authorization: Bearer <API_SENTINEL_KEY>
 ```
 
 **Rotas públicas** (sem autenticação):

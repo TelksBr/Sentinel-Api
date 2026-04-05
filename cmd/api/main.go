@@ -45,8 +45,8 @@ func main() {
 	apiKey, err := middleware.GetAPIKeyFromEnv()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "❌ Erro: %v\n", err)
-		fmt.Fprintln(os.Stderr, "Defina a variável de ambiente API_ATLAS_KEY com sua chave de API")
-		fmt.Fprintln(os.Stderr, "Exemplo: export API_ATLAS_KEY=minha-chave-api")
+		fmt.Fprintln(os.Stderr, "Defina a variável de ambiente API_SENTINEL_KEY com sua chave de API")
+		fmt.Fprintln(os.Stderr, "Exemplo: export API_SENTINEL_KEY=minha-chave-api")
 		os.Exit(1)
 	}
 
@@ -74,7 +74,7 @@ func main() {
 	// Iniciar servidor
 	addr := fmt.Sprintf(":%d", *port)
 	fmt.Printf("🚀 Iniciando servidor na porta %d...\n", *port)
-	fmt.Printf("🔑 API Key obtida da variável de ambiente API_ATLAS_KEY\n")
+	fmt.Printf("🔑 API Key obtida da variável de ambiente API_SENTINEL_KEY\n")
 	fmt.Printf("📁 Detectando configurações V2Ray/Xray...\n")
 	fmt.Printf("⏰ Cronjobs iniciados (usuários teste: 5min, V2Ray expirados: 1h)\n")
 
