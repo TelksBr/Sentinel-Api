@@ -24,10 +24,10 @@ jobs:
         run: go test ./...
 
       - name: Build Linux x64
-        run: GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o build/api-v2_x64 ./cmd/api
+        run: CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -a -installsuffix cgo -ldflags="-s -w" -o build/api-v2_x64 ./cmd/api
 
       - name: Build Linux ARM64
-        run: GOOS=linux GOARCH=arm64 go build -ldflags="-s -w" -o build/api-v2_arm64 ./cmd/api
+        run: CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -a -installsuffix cgo -ldflags="-s -w" -o build/api-v2_arm64 ./cmd/api
 
       - name: Build Linux x64 Static
         run: CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -a -installsuffix cgo -ldflags="-s -w" -o build/api-v2_static ./cmd/api
