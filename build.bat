@@ -3,15 +3,17 @@ REM Script de build para Linux (desenvolvido no Windows)
 
 if not exist build mkdir build
 
-echo Building for Linux x64...
+echo Building for Linux x64 (static)...
+set CGO_ENABLED=0
 set GOOS=linux
 set GOARCH=amd64
-go build -ldflags="-s -w" -o build/api-v2_x64 ./cmd/api
+go build -a -installsuffix cgo -ldflags="-s -w" -o build/api-v2_x64 ./cmd/api
 
-echo Building for Linux ARM64...
+echo Building for Linux ARM64 (static)...
+set CGO_ENABLED=0
 set GOOS=linux
 set GOARCH=arm64
-go build -ldflags="-s -w" -o build/api-v2_arm64 ./cmd/api
+go build -a -installsuffix cgo -ldflags="-s -w" -o build/api-v2_arm64 ./cmd/api
 
 echo Building static binary for Linux x64...
 set GOOS=linux

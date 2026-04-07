@@ -4,19 +4,19 @@ BINARY_NAME=api-v2
 BUILD_DIR=build
 VERSION?=1.0.0
 
-# Build para Linux x64
+# Build para Linux x64 (estático)
 .PHONY: build-x64
 build-x64:
 	@echo "Building for Linux x64..."
 	@mkdir -p $(BUILD_DIR)
-	@GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o $(BUILD_DIR)/$(BINARY_NAME)_x64 ./cmd/api
+	@CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -a -installsuffix cgo -ldflags="-s -w" -o $(BUILD_DIR)/$(BINARY_NAME)_x64 ./cmd/api
 
-# Build para Linux ARM64
+# Build para Linux ARM64 (estático)
 .PHONY: build-arm64
 build-arm64:
 	@echo "Building for Linux ARM64..."
 	@mkdir -p $(BUILD_DIR)
-	@GOOS=linux GOARCH=arm64 go build -ldflags="-s -w" -o $(BUILD_DIR)/$(BINARY_NAME)_arm64 ./cmd/api
+	@CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -a -installsuffix cgo -ldflags="-s -w" -o $(BUILD_DIR)/$(BINARY_NAME)_arm64 ./cmd/api
 
 # Build para todas as plataformas Linux
 .PHONY: build-all
