@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/gofrs/flock"
 	"github.com/tidwall/pretty"
 	"github.com/tidwall/sjson"
 
@@ -28,10 +29,41 @@ func NewV2RayService() *V2RayService {
 	return &V2RayService{}
 }
 
+// configWriteLockPath caminho do lock entre processos para escrita no config.json.
+// SENTINEL_V2RAY_CONFIG_LOCK_FILE sobrescreve (recomendado com várias instâncias).
+func (s *V2RayService) configWriteLockPath() string {
+	if p := strings.TrimSpace(os.Getenv("SENTINEL_V2RAY_CONFIG_LOCK_FILE")); p != "" {
+		return p
+	}
+	return s.getConfigPath() + ".sentinel.lock"
+}
+
+// lockConfigWrite bloqueia até obter o mutex do serviço e um flock exclusivo no ficheiro de lock.
+func (s *V2RayService) lockConfigWrite() (unlock func(), err error) {
+	s.mutex.Lock()
+	fl := flock.New(s.configWriteLockPath())
+	if err := fl.Lock(); err != nil {
+		s.mutex.Unlock()
+		return nil, err
+	}
+	return func() {
+		if uerr := fl.Unlock(); uerr != nil {
+			utils.WriteLog(fmt.Sprintf("Erro ao libertar lock de escrita do config V2Ray: %v", uerr))
+		}
+		s.mutex.Unlock()
+	}, nil
+}
+
 // CreateUsers cria usuários V2Ray
 func (s *V2RayService) CreateUsers(users []models.V2RayUser) models.V2RayUserCreateResponse {
-	s.mutex.Lock()
-	defer s.mutex.Unlock()
+	unlock, err := s.lockConfigWrite()
+	if err != nil {
+		return models.V2RayUserCreateResponse{
+			Error:   true,
+			Message: fmt.Sprintf("Erro ao obter lock de escrita do config: %v", err),
+		}
+	}
+	defer unlock()
 
 	// Ler configuração atual
 	cfg, err := s.loadConfigGeneric()
@@ -83,8 +115,14 @@ func (s *V2RayService) CreateUsers(users []models.V2RayUser) models.V2RayUserCre
 
 // DeleteUsers deleta usuários V2Ray
 func (s *V2RayService) DeleteUsers(uuids []string) models.V2RayUserCreateResponse {
-	s.mutex.Lock()
-	defer s.mutex.Unlock()
+	unlock, err := s.lockConfigWrite()
+	if err != nil {
+		return models.V2RayUserCreateResponse{
+			Error:   true,
+			Message: fmt.Sprintf("Erro ao obter lock de escrita do config: %v", err),
+		}
+	}
+	defer unlock()
 
 	// Ler configuração atual
 	cfg, err := s.loadConfigGeneric()
@@ -159,8 +197,15 @@ func (s *V2RayService) DeleteUsers(uuids []string) models.V2RayUserCreateRespons
 
 // UpdateValidate atualiza a validade de um usuário V2Ray
 func (s *V2RayService) UpdateValidate(uuid string, days int) models.V2RayUserResponse {
-	s.mutex.Lock()
-	defer s.mutex.Unlock()
+	unlock, err := s.lockConfigWrite()
+	if err != nil {
+		return models.V2RayUserResponse{
+			UUID:    uuid,
+			Success: false,
+			Message: fmt.Sprintf("Erro ao obter lock de escrita do config: %v", err),
+		}
+	}
+	defer unlock()
 
 	// Ler configuração atual
 	cfg, err := s.loadConfigGeneric()
@@ -213,8 +258,15 @@ func (s *V2RayService) UpdateValidate(uuid string, days int) models.V2RayUserRes
 
 // DisableUser desabilita um usuário V2Ray (remove o cliente)
 func (s *V2RayService) DisableUser(uuid string) models.V2RayUserResponse {
-	s.mutex.Lock()
-	defer s.mutex.Unlock()
+	unlock, err := s.lockConfigWrite()
+	if err != nil {
+		return models.V2RayUserResponse{
+			UUID:    uuid,
+			Success: false,
+			Message: fmt.Sprintf("Erro ao obter lock de escrita do config: %v", err),
+		}
+	}
+	defer unlock()
 
 	// Ler configuração atual
 	cfg, err := s.loadConfigGeneric()
@@ -265,8 +317,15 @@ func (s *V2RayService) DisableUser(uuid string) models.V2RayUserResponse {
 
 // EnableUser habilita um usuário V2Ray (define data de expiração)
 func (s *V2RayService) EnableUser(uuid string, expirationDate *string) models.V2RayUserResponse {
-	s.mutex.Lock()
-	defer s.mutex.Unlock()
+	unlock, err := s.lockConfigWrite()
+	if err != nil {
+		return models.V2RayUserResponse{
+			UUID:    uuid,
+			Success: false,
+			Message: fmt.Sprintf("Erro ao obter lock de escrita do config: %v", err),
+		}
+	}
+	defer unlock()
 
 	// Ler configuração atual
 	cfg, err := s.loadConfigGeneric()
@@ -321,8 +380,11 @@ func (s *V2RayService) EnableUser(uuid string, expirationDate *string) models.V2
 
 // RemoveExpiredUsers remove usuários V2Ray expirados
 func (s *V2RayService) RemoveExpiredUsers() error {
-	s.mutex.Lock()
-	defer s.mutex.Unlock()
+	unlock, err := s.lockConfigWrite()
+	if err != nil {
+		return fmt.Errorf("erro ao obter lock de escrita do config: %w", err)
+	}
+	defer unlock()
 
 	// Ler configuração atual
 	cfg, err := s.loadConfigGeneric()
@@ -762,8 +824,14 @@ func (s *V2RayService) restartOrReloadXray() error {
 
 // DeleteAllUsers deleta todos os usuários V2Ray (remove todos os clientes de todos os inbounds)
 func (s *V2RayService) DeleteAllUsers() models.V2RayUserCreateResponse {
-	s.mutex.Lock()
-	defer s.mutex.Unlock()
+	unlock, err := s.lockConfigWrite()
+	if err != nil {
+		return models.V2RayUserCreateResponse{
+			Error:   true,
+			Message: fmt.Sprintf("Erro ao obter lock de escrita do config: %v", err),
+		}
+	}
+	defer unlock()
 
 	// Ler configuração atual
 	cfg, err := s.loadConfigGeneric()

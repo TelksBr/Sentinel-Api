@@ -2,6 +2,7 @@ package services
 
 import (
 	"encoding/json"
+	"fmt"
 	"log"
 	"os"
 	"os/exec"
@@ -12,6 +13,8 @@ import (
 	"time"
 
 	"api-v2/internal/models"
+
+	"github.com/gofrs/flock"
 )
 
 // MonitorService implementa o serviço de monitoramento de usuários online
@@ -42,6 +45,12 @@ type MonitorService struct {
 	cacheDuration time.Duration
 	// Regex pre-compilado para evitar recompilação a cada linha
 	v2rayLogRegex *regexp.Regexp
+
+	// Múltiplas instâncias: limpeza do log reescreve o ficheiro — só uma deve fazê-lo.
+	// SENTINEL_DISABLE_V2RAY_LOG_CLEANUP=true desativa a goroutine de limpeza (recomendado com N replicas).
+	disableV2RayLogCleanup bool
+	// SENTINEL_V2RAY_CLEANUP_LOCK_FILE=/caminho/lock (opcional); default = <access.log>.cleanup.lock
+	v2rayCleanupLockFile string
 }
 
 // NewMonitorService cria uma nova instância do serviço de monitoramento
@@ -50,17 +59,19 @@ func NewMonitorService(v2rayConfigPath string) *MonitorService {
 	v2rayLogRegex := regexp.MustCompile(`(\d{4}\/\d{2}\/\d{2} \d{2}:\d{2}:\d{2}).*?(accepted|rejected).*?email:\s*([\w._%+-]+@[\w.-]+\.[a-zA-Z]{2,})`)
 
 	return &MonitorService{
-		sshUsers:         0,
-		v2rayUsers:       0,
-		dtProtoUsers:     0,
-		stopChan:         make(chan bool),
-		v2rayUUIDCache:   make(map[string]string, 100),
-		sshUsersList:     make([]models.SSHUserOnline, 0, 50),
-		v2rayUsersList:   make([]models.V2RayUserOnline, 0, 100),
-		dtProtoUsersList: make([]models.DTProtoUserOnline, 0, 100),
-		cacheDuration:    10 * time.Second,
-		v2rayLogRegex:    v2rayLogRegex,
-		v2rayConfigPath:  v2rayConfigPath,
+		sshUsers:               0,
+		v2rayUsers:             0,
+		dtProtoUsers:           0,
+		stopChan:               make(chan bool),
+		v2rayUUIDCache:         make(map[string]string, 100),
+		sshUsersList:           make([]models.SSHUserOnline, 0, 50),
+		v2rayUsersList:         make([]models.V2RayUserOnline, 0, 100),
+		dtProtoUsersList:       make([]models.DTProtoUserOnline, 0, 100),
+		cacheDuration:          10 * time.Second,
+		v2rayLogRegex:          v2rayLogRegex,
+		v2rayConfigPath:        v2rayConfigPath,
+		disableV2RayLogCleanup: parseEnvBool("SENTINEL_DISABLE_V2RAY_LOG_CLEANUP", false),
+		v2rayCleanupLockFile:   strings.TrimSpace(os.Getenv("SENTINEL_V2RAY_CLEANUP_LOCK_FILE")),
 		v2rayLogPaths: []string{
 			"/var/log/xray/access.log",
 			"/usr/local/etc/xray/access.log",
@@ -86,7 +97,11 @@ func (m *MonitorService) Start() {
 	go m.monitorSSHUsers()
 	go m.monitorV2RayUsers()
 	go m.monitorDTProtoUsers()
-	go m.cleanV2RayLogs()
+	if m.disableV2RayLogCleanup {
+		log.Println("ℹ️ Limpeza automática do access.log desativada (SENTINEL_DISABLE_V2RAY_LOG_CLEANUP); várias instâncias podem partilhar o log sem escrita concorrente.")
+	} else {
+		go m.cleanV2RayLogs()
+	}
 	go m.reloadV2RayUUIDCache()
 
 	log.Println("✅ Serviço de monitoramento iniciado")
@@ -601,6 +616,21 @@ func (m *MonitorService) performV2RayLogCleanup() {
 		return
 	}
 
+	lockPath := m.v2rayCleanupLockFile
+	if lockPath == "" {
+		lockPath = m.currentLogPath + ".cleanup.lock"
+	}
+	fl := flock.New(lockPath)
+	if err := fl.Lock(); err != nil {
+		log.Printf("❌ Erro ao obter lock de limpeza do log V2Ray (%s): %v", lockPath, err)
+		return
+	}
+	defer func() {
+		if uerr := fl.Unlock(); uerr != nil {
+			log.Printf("⚠️ Erro ao libertar lock de limpeza do log V2Ray: %v", uerr)
+		}
+	}()
+
 	log.Println("🧹 Iniciando limpeza de logs V2Ray antigos...")
 
 	threshold := time.Now().Add(-12 * time.Hour)
@@ -636,8 +666,8 @@ func (m *MonitorService) performV2RayLogCleanup() {
 		}
 	}
 
-	// Escrever em arquivo temporário e rename atômico para minimizar data loss
-	tmpPath := m.currentLogPath + ".cleanup.tmp"
+	// Ficheiro tmp único por PID (evita corrida entre processos no mesmo .tmp)
+	tmpPath := fmt.Sprintf("%s.cleanup.%d.tmp", m.currentLogPath, os.Getpid())
 	if err := os.WriteFile(tmpPath, []byte(strings.Join(newLogContent, "\n")), 0644); err != nil {
 		log.Printf("❌ Erro ao escrever tmp de limpeza: %v", err)
 		return
@@ -864,4 +894,19 @@ func (m *MonitorService) calculateCPUUsage(stats1, stats2 map[string]uint64) flo
 	}
 
 	return usage
+}
+
+func parseEnvBool(key string, defaultVal bool) bool {
+	v := strings.TrimSpace(os.Getenv(key))
+	if v == "" {
+		return defaultVal
+	}
+	switch strings.ToLower(v) {
+	case "1", "true", "yes", "y", "on":
+		return true
+	case "0", "false", "no", "n", "off":
+		return false
+	default:
+		return defaultVal
+	}
 }

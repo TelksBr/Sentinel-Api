@@ -6,9 +6,11 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
+	"github.com/gofrs/flock"
 	"github.com/robfig/cron/v3"
 )
 
@@ -17,12 +19,37 @@ const (
 	CRONJOB_FILE = "/root/sentinel/temp/cronjobs.json"
 )
 
+// cronjobStoreLockPath ficheiro de lock entre processos para cronjobs.json.
+// SENTINEL_CRONJOBS_LOCK_FILE sobrescreve (recomendado com várias instâncias).
+func cronjobStoreLockPath() string {
+	if p := strings.TrimSpace(os.Getenv("SENTINEL_CRONJOBS_LOCK_FILE")); p != "" {
+		return p
+	}
+	return CRONJOB_FILE + ".sentinel.lock"
+}
+
 // CronjobService gerencia os cronjobs da aplicação
 type CronjobService struct {
 	cron         *cron.Cron
 	sshService   *services.SSHService
 	v2rayService *services.V2RayService
-	fileMutex    sync.Mutex // protege leitura/escrita do arquivo cronjobs.json
+	fileMutex    sync.Mutex // protege leitura/escrita do arquivo cronjobs.json (intra-processo)
+}
+
+// lockCronjobStore bloqueia até obter mutex + flock exclusivo no store partilhado entre APIs.
+func (cs *CronjobService) lockCronjobStore() (unlock func(), err error) {
+	cs.fileMutex.Lock()
+	fl := flock.New(cronjobStoreLockPath())
+	if err := fl.Lock(); err != nil {
+		cs.fileMutex.Unlock()
+		return nil, err
+	}
+	return func() {
+		if uerr := fl.Unlock(); uerr != nil {
+			log.Printf("Erro ao libertar lock do store de cronjobs: %v", uerr)
+		}
+		cs.fileMutex.Unlock()
+	}, nil
 }
 
 // NewCronjobService cria uma nova instância do serviço de cronjobs
@@ -30,9 +57,21 @@ func NewCronjobService(sshService *services.SSHService, v2rayService *services.V
 	// Criar diretório se não existir
 	os.MkdirAll(CRONJOB_DIR, 0755)
 
-	// Criar arquivo de cronjobs se não existir
-	if _, err := os.Stat(CRONJOB_FILE); os.IsNotExist(err) {
-		os.WriteFile(CRONJOB_FILE, []byte("[]"), 0644)
+	// Criar arquivo de cronjobs se não existir (com lock para várias instâncias no arranque)
+	fl := flock.New(cronjobStoreLockPath())
+	if err := fl.Lock(); err != nil {
+		log.Printf("Aviso: não foi possível obter lock para inicializar cronjobs.json: %v", err)
+	} else {
+		defer func() {
+			if uerr := fl.Unlock(); uerr != nil {
+				log.Printf("Erro ao libertar lock após init cronjobs.json: %v", uerr)
+			}
+		}()
+		if _, err := os.Stat(CRONJOB_FILE); os.IsNotExist(err) {
+			if err := os.WriteFile(CRONJOB_FILE, []byte("[]"), 0644); err != nil {
+				log.Printf("Erro ao criar cronjobs.json: %v", err)
+			}
+		}
 	}
 
 	return &CronjobService{
@@ -104,8 +143,12 @@ func (cs *CronjobService) AddV2RayCronjob(id, execTimeISO string) error {
 
 // executeTestUserCronjobs executa cronjobs de usuários de teste (thread-safe)
 func (cs *CronjobService) executeTestUserCronjobs() {
-	cs.fileMutex.Lock()
-	defer cs.fileMutex.Unlock()
+	unlock, err := cs.lockCronjobStore()
+	if err != nil {
+		log.Printf("Erro ao obter lock do store de cronjobs (execução agendada): %v", err)
+		return
+	}
+	defer unlock()
 
 	log.Printf("Executando cronjobs de usuários teste...")
 
@@ -218,8 +261,11 @@ func (cs *CronjobService) executeCronjob(job *Cronjob) error {
 
 // addCronjob adiciona um cronjob ao arquivo (thread-safe)
 func (cs *CronjobService) addCronjob(cronjob Cronjob) error {
-	cs.fileMutex.Lock()
-	defer cs.fileMutex.Unlock()
+	unlock, err := cs.lockCronjobStore()
+	if err != nil {
+		return err
+	}
+	defer unlock()
 
 	cronjobs, err := cs.loadCronjobs()
 	if err != nil {
