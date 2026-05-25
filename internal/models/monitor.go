@@ -78,6 +78,7 @@ type MemoryInfo struct {
 
 // CPUInfo representa informações de CPU
 type CPUInfo struct {
+	Cores        int     `json:"cores"`
 	UsagePercent float64 `json:"usage_percent"` // %
 	User         uint64  `json:"user"`
 	Nice         uint64  `json:"nice"`

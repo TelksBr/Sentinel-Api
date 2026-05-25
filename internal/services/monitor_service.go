@@ -822,8 +822,10 @@ func (m *MonitorService) getCPUInfo() models.CPUInfo {
 
 	// Calcular uso percentual
 	usagePercent := m.calculateCPUUsage(stats1, stats2)
+	cores := countLogicalCPUsFromProcStat(string(output1))
 
 	return models.CPUInfo{
+		Cores:        cores,
 		UsagePercent: usagePercent,
 		User:         stats2["user"],
 		Nice:         stats2["nice"],
@@ -834,6 +836,23 @@ func (m *MonitorService) getCPUInfo() models.CPUInfo {
 		SoftIRQ:      stats2["softirq"],
 		Steal:        stats2["steal"],
 	}
+}
+
+// countLogicalCPUsFromProcStat conta linhas cpuN em /proc/stat (CPUs lógicas).
+func countLogicalCPUsFromProcStat(procStat string) int {
+	n := 0
+	for _, line := range strings.Split(procStat, "\n") {
+		line = strings.TrimSpace(line)
+		if len(line) < 5 || !strings.HasPrefix(line, "cpu") {
+			continue
+		}
+		// Ignora a linha agregada "cpu ..."; aceita apenas "cpu0", "cpu1", ...
+		switch line[3] {
+		case '0', '1', '2', '3', '4', '5', '6', '7', '8', '9':
+			n++
+		}
+	}
+	return n
 }
 
 // parseCPUStat faz parse das estatísticas de CPU de /proc/stat
