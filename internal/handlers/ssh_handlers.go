@@ -48,6 +48,16 @@ func (h *SSHHandlers) CreateUsers(c *gin.Context) {
 		}
 	}
 
+	usernames := make([]string, 0, len(users))
+	for _, user := range users {
+		usernames = append(usernames, user.Username)
+	}
+
+	if _, err := h.cronService.RemovePendingSSHTestCronjobs(usernames); err != nil {
+		HandleError(c, err)
+		return
+	}
+
 	result := h.sshService.CreateUsers(users)
 	status := http.StatusOK
 	if result.Error {

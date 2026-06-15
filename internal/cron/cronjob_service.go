@@ -141,6 +141,45 @@ func (cs *CronjobService) AddV2RayCronjob(id, execTimeISO string) error {
 	return cs.addCronjob(cronjob)
 }
 
+// RemovePendingSSHTestCronjobs remove tarefas pendentes de deleção para usuários SSH de teste.
+func (cs *CronjobService) RemovePendingSSHTestCronjobs(usernames []string) (int, error) {
+	if len(usernames) == 0 {
+		return 0, nil
+	}
+
+	targets := make(map[string]struct{}, len(usernames))
+	for _, username := range usernames {
+		targets[username] = struct{}{}
+	}
+
+	unlock, err := cs.lockCronjobStore()
+	if err != nil {
+		return 0, err
+	}
+	defer unlock()
+
+	cronjobs, err := cs.loadCronjobs()
+	if err != nil {
+		return 0, err
+	}
+
+	filtered := make([]Cronjob, 0, len(cronjobs))
+	removed := 0
+	for _, job := range cronjobs {
+		if _, ok := targets[job.ID]; ok && job.Type == "ssh" && !job.Executed {
+			removed++
+			continue
+		}
+		filtered = append(filtered, job)
+	}
+
+	if removed == 0 {
+		return 0, nil
+	}
+
+	return removed, cs.saveCronjobs(filtered)
+}
+
 // executeTestUserCronjobs executa cronjobs de usuários de teste (thread-safe)
 func (cs *CronjobService) executeTestUserCronjobs() {
 	unlock, err := cs.lockCronjobStore()
