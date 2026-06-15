@@ -13,7 +13,11 @@ import (
 	"api-v2/internal/services"
 )
 
+var version = "dev"
+
 func main() {
+	log.Printf("🚀 Sentinel API versão %s iniciando...", version)
+
 	// Otimização: Limitar GOMAXPROCS para reduzir consumo de CPU
 	// Usar 50% dos cores disponíveis (mínimo 1, máximo 4)
 	numCPU := runtime.NumCPU()
@@ -73,7 +77,7 @@ func main() {
 
 	// Iniciar servidor
 	addr := fmt.Sprintf(":%d", *port)
-	fmt.Printf("🚀 Iniciando servidor na porta %d...\n", *port)
+	fmt.Printf("🚀 Iniciando Sentinel API %s na porta %d...\n", version, *port)
 	fmt.Printf("🔑 API Key obtida da variável de ambiente API_SENTINEL_KEY\n")
 	fmt.Printf("📁 Detectando configurações V2Ray/Xray...\n")
 	fmt.Printf("⏰ Cronjobs iniciados (usuários teste: 5min, V2Ray expirados: 1h)\n")
