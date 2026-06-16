@@ -96,6 +96,13 @@ func (h *SSHHandlers) UpdateUser(c *gin.Context) {
 	var result models.SSHUserResponse
 	var results []models.SSHUserResponse
 
+	if updateRequest.ValidateDays != nil {
+		if _, err := h.cronService.RemovePendingSSHTestCronjobs([]string{username}); err != nil {
+			HandleError(c, err)
+			return
+		}
+	}
+
 	if updateRequest.Password != nil {
 		result = h.sshService.UpdatePassword(username, *updateRequest.Password)
 		results = append(results, result)
