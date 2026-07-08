@@ -175,6 +175,30 @@ func KillUserProcessesForced(username string) error {
 	return nil
 }
 
+// KillUserProcessesByUID mata processos pelo UID numérico.
+// Essencial após userdel: o username deixa de existir em /etc/passwd e pkill -u <name> falha,
+// mas túneis SSH/VPN continuam rodando com o UID antigo.
+func KillUserProcessesByUID(uid int) error {
+	if uid < 0 {
+		return fmt.Errorf("uid inválido: %d", uid)
+	}
+	uidStr := strconv.Itoa(uid)
+	ExecuteCommandQuiet("pkill", "-KILL", "-u", uidStr)
+	return nil
+}
+
+// TerminateUserSessions encerra sessões ativas pelo username (se ainda existir) e pelo UID.
+func TerminateUserSessions(username string, uid int) {
+	if username != "" {
+		if err := sanitizeUsername(username); err == nil {
+			KillUserProcessesForced(username)
+		}
+	}
+	if uid >= 0 {
+		_ = KillUserProcessesByUID(uid)
+	}
+}
+
 // HasUserProcesses verifica se existem processos do usuário
 func HasUserProcesses(username string) (bool, error) {
 	if err := sanitizeUsername(username); err != nil {
@@ -185,6 +209,18 @@ func HasUserProcesses(username string) (bool, error) {
 	err := ExecuteCommandQuiet("pgrep", "-u", username)
 	if err != nil {
 		// pgrep retorna exit 1 se não encontrar processos
+		return false, nil
+	}
+	return true, nil
+}
+
+// HasUserProcessesByUID verifica processos pelo UID (funciona após userdel).
+func HasUserProcessesByUID(uid int) (bool, error) {
+	if uid < 0 {
+		return false, fmt.Errorf("uid inválido: %d", uid)
+	}
+	err := ExecuteCommandQuiet("pgrep", "-u", strconv.Itoa(uid))
+	if err != nil {
 		return false, nil
 	}
 	return true, nil
@@ -405,9 +441,12 @@ func DisableUser(username string) error {
 		return err
 	}
 
-	// DEPOIS: Matar todos os processos do usuário (incluindo sshd)
+	// Capturar UID antes de qualquer alteração que possa afetar resolução de nome
+	uid, _ := GetUserUID(username)
+
+	// DEPOIS: Matar todos os processos do usuário (incluindo túneis SSH)
 	// Com a conta bloqueada, não haverá novos processos sendo criados
-	KillUserProcessesForced(username)
+	TerminateUserSessions(username, uid)
 
 	return nil
 }

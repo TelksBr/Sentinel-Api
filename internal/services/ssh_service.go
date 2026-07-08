@@ -323,6 +323,18 @@ func (s *SSHService) deleteSingleUser(username string) models.SSHUserResponse {
 		}
 	}
 
+	// Capturar UID antes do userdel — túneis SSH continuam com o UID mesmo após remover a conta
+	uid, err := utils.GetUserUID(username)
+	if err != nil {
+		errorMessage := fmt.Sprintf("Error getting user UID: %v", err)
+		utils.WriteLog(errorMessage)
+		return models.SSHUserResponse{
+			Username: username,
+			Success:  false,
+			Message:  errorMessage,
+		}
+	}
+
 	// PRIMEIRO: Desativar o usuário para impedir novas conexões
 	if err := utils.ExecuteCommandQuiet("usermod", "-L", username); err != nil {
 		return models.SSHUserResponse{
@@ -339,40 +351,33 @@ func (s *SSHService) deleteSingleUser(username string) models.SSHUserResponse {
 		}
 	}
 
-	// Função para verificar se existem processos do usuário
-	hasUserProcesses := func() (bool, error) {
-		return utils.HasUserProcesses(username)
-	}
+	// Encerrar túneis/sessões ativas antes de remover a conta
+	utils.TerminateUserSessions(username, uid)
 
 	attempts := 0
 	deletionSuccess := false
 
 	// Loop de tentativas
 	for attempts < 3 && !deletionSuccess {
-		// PRIMEIRO: Tenta deletar usuário com força (userdel -f -r)
-		// Com o usuário desativado, não haverá novos processos sendo criados durante a deleção
-		err := utils.DeleteUser(username)
-		if err != nil {
+		// Tenta deletar usuário com força (userdel -f -r)
+		if err := utils.DeleteUser(username); err != nil {
+			utils.TerminateUserSessions(username, uid)
 			attempts++
 			time.Sleep(1 * time.Second)
 			continue
 		}
 
-		// DEPOIS: Matar todos os processos restantes do usuário
-		// Mata processos de forma forçada após a deleção para garantir que nenhum processo sobrou
-		utils.KillUserProcessesForced(username)
+		// Após userdel o username não resolve mais — matar e verificar pelo UID
+		utils.TerminateUserSessions("", uid)
 
-		// Verifica se ainda existem processos
-		hasProcesses, _ := hasUserProcesses()
+		hasProcesses, _ := utils.HasUserProcessesByUID(uid)
 		if hasProcesses {
+			utils.TerminateUserSessions("", uid)
 			attempts++
 			time.Sleep(1 * time.Second)
-			// Tentar matar processos novamente
-			utils.KillUserProcessesForced(username)
 			continue
 		}
 
-		// Verifica se usuário foi realmente removido
 		stillExists, _ := utils.CheckUserExists(username)
 		if !stillExists {
 			deletionSuccess = true
@@ -382,11 +387,8 @@ func (s *SSHService) deleteSingleUser(username string) models.SSHUserResponse {
 		time.Sleep(1 * time.Second)
 	}
 
-	// Última verificação: garantir que não há processos restantes
 	if deletionSuccess {
-		// Matar processos uma última vez para garantir que nenhum sobrou
-		utils.KillUserProcessesForced(username)
-		// Remover backup de expiração se existir
+		utils.TerminateUserSessions("", uid)
 		utils.RemoveExpirationBackup(username)
 	}
 
