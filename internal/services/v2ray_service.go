@@ -580,6 +580,18 @@ func (s *V2RayService) saveConfigGeneric(cfg map[string]interface{}) error {
 	return s.saveConfigBytes(formattedJSON)
 }
 
+// inboundAcceptsClients indica se o inbound deve receber clients V2Ray.
+// Ignora o inbound de API (tag "api" / protocolo dokodemo-door), que não representa usuários.
+func inboundAcceptsClients(inbound map[string]interface{}) bool {
+	if tag, _ := inbound["tag"].(string); tag == "api" {
+		return false
+	}
+	if protocol, _ := inbound["protocol"].(string); protocol == "dokodemo-door" {
+		return false
+	}
+	return true
+}
+
 // upsertClientInAllInbounds adiciona ou atualiza um client em todos os inbounds
 func (s *V2RayService) upsertClientInAllInbounds(cfg map[string]interface{}, uuid, email, expiration string) {
 	inbounds, ok := cfg["inbounds"].([]interface{})
@@ -589,6 +601,10 @@ func (s *V2RayService) upsertClientInAllInbounds(cfg map[string]interface{}, uui
 	for i := range inbounds {
 		inbound, ok := inbounds[i].(map[string]interface{})
 		if !ok {
+			continue
+		}
+		// Não criar contas no inbound de API (dokodemo-door / tag "api")
+		if !inboundAcceptsClients(inbound) {
 			continue
 		}
 		settings, _ := inbound["settings"].(map[string]interface{})
@@ -610,6 +626,7 @@ func (s *V2RayService) upsertClientInAllInbounds(cfg map[string]interface{}, uui
 			"id":              uuid,
 			"email":           email,
 			"expiration_date": expiration,
+			"decryption":      "none",
 		}
 		if idx >= 0 {
 			clients[idx] = newClient
