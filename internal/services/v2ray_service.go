@@ -626,7 +626,6 @@ func (s *V2RayService) upsertClientInAllInbounds(cfg map[string]interface{}, uui
 			"id":              uuid,
 			"email":           email,
 			"expiration_date": expiration,
-			"decryption":      "none",
 		}
 		if idx >= 0 {
 			clients[idx] = newClient
