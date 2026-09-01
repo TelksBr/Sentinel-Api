@@ -61,10 +61,19 @@ func NewDetailedUsersResponse(sshUsers []SSHUserOnline, v2rayUsers []V2RayUserOn
 	}
 }
 
-// SystemResources representa as informações de recursos do sistema
+// SystemResources representa as informações de recursos do sistema e contagem de contas criadas
 type SystemResources struct {
-	Memory MemoryInfo `json:"memory"`
-	CPU    CPUInfo    `json:"cpu"`
+	Memory        MemoryInfo   `json:"memory"`
+	CPU           CPUInfo      `json:"cpu"`
+	TotalAccounts int          `json:"total_accounts"`
+	Accounts      AccountsInfo `json:"accounts"`
+}
+
+// AccountsInfo representa o resumo de todas as contas cadastradas no servidor
+type AccountsInfo struct {
+	TotalSSH   int `json:"total_ssh"`
+	TotalV2Ray int `json:"total_v2ray"`
+	Total      int `json:"total"`
 }
 
 // MemoryInfo representa informações de memória

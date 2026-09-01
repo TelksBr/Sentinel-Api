@@ -849,3 +849,55 @@ func (s *UnixStore) writeGShadowFile(path string, mode os.FileMode) error {
 	}
 	return w.Flush()
 }
+
+// CountSSHUsers conta quantos usuários SSH (não-sistema com /bin/false ou /usr/sbin/nologin) existem no UnixStore carregado.
+func (s *UnixStore) CountSSHUsers() int {
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
+	count := 0
+	for _, p := range s.Passwd {
+		if p.UID >= 1000 && !IsReservedUsername(p.Username) && (p.Shell == "/bin/false" || p.Shell == "/usr/sbin/nologin") {
+			count++
+		}
+	}
+	return count
+}
+
+// CountTotalSSHUsers lê o arquivo passwd diretamente e conta usuários SSH não-sistema com /bin/false ou /usr/sbin/nologin.
+// Leitura ultrarrápida (< 0.1ms).
+func CountTotalSSHUsers(baseDir ...string) int {
+	dir := DefaultBaseDir
+	if len(baseDir) > 0 && baseDir[0] != "" {
+		dir = baseDir[0]
+	}
+
+	passwdPath := filepath.Join(dir, "passwd")
+	file, err := os.Open(passwdPath)
+	if err != nil {
+		return 0
+	}
+	defer file.Close()
+
+	scanner := bufio.NewScanner(file)
+	count := 0
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		parts := strings.Split(line, ":")
+		if len(parts) < 7 {
+			continue
+		}
+		username := parts[0]
+		uid, err := strconv.Atoi(parts[2])
+		if err != nil {
+			continue
+		}
+		shell := parts[6]
+		if uid >= 1000 && !IsReservedUsername(username) && (shell == "/bin/false" || shell == "/usr/sbin/nologin") {
+			count++
+		}
+	}
+	return count
+}

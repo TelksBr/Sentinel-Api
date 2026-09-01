@@ -1,6 +1,7 @@
 package utils
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -202,5 +203,40 @@ func TestUnixStore_DisableAndEnable(t *testing.T) {
 	}
 	if store.Shadow[sIdx].ExpireDays != newExpire {
 		t.Errorf("Data de expiração incorreta: %s vs %s", store.Shadow[sIdx].ExpireDays, newExpire)
+	}
+}
+
+func TestUnixStore_CountSSHUsers(t *testing.T) {
+	tempDir, cleanup := createMockUnixEnv(t)
+	defer cleanup()
+
+	store := NewUnixStore(tempDir)
+	if err := store.Load(); err != nil {
+		t.Fatalf("Erro ao carregar store: %v", err)
+	}
+
+	// Mock inicial tem 1 usuário não-sistema (existinguser com /bin/false)
+	if count := store.CountSSHUsers(); count != 1 {
+		t.Errorf("Esperava 1 usuário SSH, obteve %d", count)
+	}
+
+	if count := CountTotalSSHUsers(tempDir); count != 1 {
+		t.Errorf("CountTotalSSHUsers esperava 1, obteve %d", count)
+	}
+
+	// Adicionar 5 novos usuários SSH
+	for i := 1; i <= 5; i++ {
+		store.UpsertUser(fmt.Sprintf("user%d", i), "$6$hash", 2000+i, 2000+i, "19900", "/bin/false")
+	}
+	// Adicionar 1 usuário admin com /bin/bash (não deve contar como túnel SSH)
+	store.UpsertUser("admin_bash", "$6$hash", 3000, 3000, "", "/bin/bash")
+	_ = store.Save()
+
+	if count := store.CountSSHUsers(); count != 6 {
+		t.Errorf("Esperava 6 usuários SSH no store, obteve %d", count)
+	}
+
+	if count := CountTotalSSHUsers(tempDir); count != 6 {
+		t.Errorf("CountTotalSSHUsers esperava 6 usuários SSH, obteve %d", count)
 	}
 }

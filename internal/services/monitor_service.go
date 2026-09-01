@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"api-v2/internal/models"
+	"api-v2/internal/utils"
 
 	"github.com/gofrs/flock"
 )
@@ -722,14 +723,32 @@ func (m *MonitorService) extractTimestampFromLog(line string) time.Time {
 	return time.Time{}
 }
 
-// GetSystemResources retorna informações de recursos do sistema (CPU e RAM)
+// GetSystemResources retorna informações de recursos do sistema (CPU, RAM e total de contas criadas)
 func (m *MonitorService) GetSystemResources() models.SystemResources {
 	memInfo := m.getMemoryInfo()
 	cpuInfo := m.getCPUInfo()
+	accountsInfo := m.getAccountsInfo()
 
 	return models.SystemResources{
-		Memory: memInfo,
-		CPU:    cpuInfo,
+		Memory:        memInfo,
+		CPU:           cpuInfo,
+		TotalAccounts: accountsInfo.Total,
+		Accounts:      accountsInfo,
+	}
+}
+
+// getAccountsInfo obtém a contagem de contas criadas (SSH e V2Ray)
+func (m *MonitorService) getAccountsInfo() models.AccountsInfo {
+	totalSSH := utils.CountTotalSSHUsers()
+
+	m.mutex.RLock()
+	totalV2Ray := len(m.v2rayUUIDCache)
+	m.mutex.RUnlock()
+
+	return models.AccountsInfo{
+		TotalSSH:   totalSSH,
+		TotalV2Ray: totalV2Ray,
+		Total:      totalSSH + totalV2Ray,
 	}
 }
 
