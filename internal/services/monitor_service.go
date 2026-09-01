@@ -295,6 +295,9 @@ func (m *MonitorService) autoConfigureV2RayLog(configPath string) {
 			m.findV2RayLogFileSilently()
 		}
 	}
+
+	// Garantir que os logs do systemd (journald) estejam suprimidos (StandardOutput=null / StandardError=null)
+	_, _ = utils.EnsureSystemdServiceLogsDisabled("xray", "v2ray")
 }
 
 // findV2RayLogFileSilently procura arquivo de log disponível sem poluir o console
