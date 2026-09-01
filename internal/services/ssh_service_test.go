@@ -49,7 +49,10 @@ existing1:!::
 	service := NewSSHService()
 	service.SetStore(store)
 
+	utils.ProcessKillDisabled = true
+
 	cleanup := func() {
+		utils.ProcessKillDisabled = false
 		_ = os.RemoveAll(tempDir)
 	}
 	return service, cleanup
