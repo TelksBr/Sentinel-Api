@@ -40,6 +40,7 @@ type MonitorService struct {
 
 	// Caminho do config V2Ray (injetado)
 	v2rayConfigPath string
+	v2rayAvailable  bool
 
 	// Cache com TTL para evitar leituras excessivas
 	cacheExpiry   time.Time
@@ -71,6 +72,7 @@ func NewMonitorService(v2rayConfigPath string) *MonitorService {
 		cacheDuration:          10 * time.Second,
 		v2rayLogRegex:          v2rayLogRegex,
 		v2rayConfigPath:        v2rayConfigPath,
+		v2rayAvailable:         false,
 		disableV2RayLogCleanup: parseEnvBool("SENTINEL_DISABLE_V2RAY_LOG_CLEANUP", false),
 		v2rayCleanupLockFile:   strings.TrimSpace(os.Getenv("SENTINEL_V2RAY_CLEANUP_LOCK_FILE")),
 		v2rayLogPaths: []string{
@@ -88,11 +90,13 @@ func NewMonitorService(v2rayConfigPath string) *MonitorService {
 func (m *MonitorService) Start() {
 	log.Println("🚀 Iniciando serviço de monitoramento de usuários online...")
 
-	// Encontrar arquivo de log V2Ray disponível
-	m.findV2RayLogFile()
-
-	// Carregar cache de UUIDs V2Ray
-	m.loadV2RayUUIDCache()
+	// Verificar e auto-configurar logs do V2Ray se o config.json existir
+	if m.ensureV2RayConfigAndLogs() {
+		log.Println("✅ Monitoramento de V2Ray/Xray ativo e logs sincronizados")
+		m.loadV2RayUUIDCache()
+	} else {
+		log.Println("ℹ️ V2Ray/Xray não detectado no servidor (monitoramento de V2Ray pausado aguardando instalação).")
+	}
 
 	// Iniciar goroutines de monitoramento
 	go m.monitorSSHUsers()
@@ -182,29 +186,146 @@ func (m *MonitorService) GetDetailedOnlineUsers() models.DetailedUsersResponse {
 	return models.NewDetailedUsersResponse(m.sshUsersList, v2rayList, dtProtoList)
 }
 
-// findV2RayLogFile encontra o primeiro arquivo de log V2Ray disponível
-func (m *MonitorService) findV2RayLogFile() {
+// ensureV2RayConfigAndLogs verifica se o V2Ray/Xray existe e auto-configura os logs se necessário
+func (m *MonitorService) ensureV2RayConfigAndLogs() bool {
+	configPaths := []string{
+		m.v2rayConfigPath,
+		"/etc/xray/config.json",
+		"/usr/local/etc/xray/config.json",
+		"/etc/v2ray/config.json",
+		"/usr/local/etc/v2ray/config.json",
+	}
+
+	for _, p := range configPaths {
+		if p == "" {
+			continue
+		}
+		if _, err := os.Stat(p); err == nil {
+			m.v2rayConfigPath = p
+			m.autoConfigureV2RayLog(p)
+			m.mutex.Lock()
+			m.v2rayAvailable = true
+			m.mutex.Unlock()
+			return true
+		}
+	}
+
+	// Nenhum config encontrado. Checar se ao menos algum log existe
+	m.findV2RayLogFileSilently()
+	if m.currentLogPath != "" {
+		m.mutex.Lock()
+		m.v2rayAvailable = true
+		m.mutex.Unlock()
+		return true
+	}
+
+	m.mutex.Lock()
+	m.v2rayAvailable = false
+	m.mutex.Unlock()
+	return false
+}
+
+// autoConfigureV2RayLog inspeciona o config.json e injeta a seção log se ausente
+func (m *MonitorService) autoConfigureV2RayLog(configPath string) {
+	content, err := os.ReadFile(configPath)
+	if err != nil {
+		return
+	}
+
+	var cfg map[string]interface{}
+	if err := json.Unmarshal(content, &cfg); err != nil {
+		return
+	}
+
+	// Verificar se já tem log de acesso configurado
+	needUpdate := false
+	logObj, hasLog := cfg["log"].(map[string]interface{})
+	if !hasLog || logObj == nil {
+		needUpdate = true
+	} else {
+		access, _ := logObj["access"].(string)
+		if strings.TrimSpace(access) == "" || access == "none" {
+			needUpdate = true
+		}
+	}
+
+	if needUpdate {
+		log.Printf("⚙️ Injetando configuração de log no V2Ray/Xray (%s)...", configPath)
+
+		// Criar pasta de log se não existir
+		_ = os.MkdirAll("/var/log/xray", 0755)
+
+		accessLogPath := "/var/log/xray/access.log"
+		// Criar arquivo se não existir
+		if f, err := os.OpenFile(accessLogPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644); err == nil {
+			_ = f.Close()
+		}
+
+		cfg["log"] = map[string]interface{}{
+			"access":      accessLogPath,
+			"dnsLog":      false,
+			"error":       "",
+			"loglevel":    "info",
+			"maskAddress": "",
+		}
+
+		if newJSON, err := json.MarshalIndent(cfg, "", "  "); err == nil {
+			tmp := configPath + ".sentinel.tmp"
+			if err := os.WriteFile(tmp, newJSON, 0644); err == nil {
+				if err := os.Rename(tmp, configPath); err == nil {
+					log.Printf("✅ Log de acesso V2Ray/Xray configurado com sucesso em %s", accessLogPath)
+					m.currentLogPath = accessLogPath
+					// Recarregar serviço para começar a gravar logs imediatamente
+					_ = utils.ExecuteCommandQuiet("systemctl", "reload", "xray")
+					_ = utils.ExecuteCommandQuiet("systemctl", "reload", "v2ray")
+				}
+			}
+		}
+	}
+
+	if m.currentLogPath == "" {
+		if logObj, ok := cfg["log"].(map[string]interface{}); ok {
+			if access, ok := logObj["access"].(string); ok && access != "" && access != "none" {
+				if _, err := os.Stat(access); err == nil {
+					m.currentLogPath = access
+				}
+			}
+		}
+		if m.currentLogPath == "" {
+			m.findV2RayLogFileSilently()
+		}
+	}
+}
+
+// findV2RayLogFileSilently procura arquivo de log disponível sem poluir o console
+func (m *MonitorService) findV2RayLogFileSilently() {
 	for _, path := range m.v2rayLogPaths {
 		if _, err := os.Stat(path); err == nil {
 			m.currentLogPath = path
-			log.Printf("📁 Arquivo de log V2Ray encontrado: %s", path)
 			return
 		}
 	}
-	log.Println("⚠️  Nenhum arquivo de log V2Ray encontrado nos caminhos padrão")
 }
 
 // loadV2RayUUIDCache carrega o cache de UUIDs do arquivo de configuração V2Ray
 func (m *MonitorService) loadV2RayUUIDCache() {
+	if m.v2rayConfigPath == "" {
+		return
+	}
+	if _, err := os.Stat(m.v2rayConfigPath); err != nil {
+		m.mutex.Lock()
+		m.v2rayUUIDCache = make(map[string]string)
+		m.mutex.Unlock()
+		return
+	}
+
 	content, err := os.ReadFile(m.v2rayConfigPath)
 	if err != nil {
-		log.Printf("❌ Erro ao ler arquivo de configuração V2Ray (%s): %v", m.v2rayConfigPath, err)
 		return
 	}
 
 	var config map[string]interface{}
 	if err := json.Unmarshal(content, &config); err != nil {
-		log.Printf("❌ Erro ao fazer parse do JSON de configuração V2Ray: %v", err)
 		return
 	}
 
@@ -222,10 +343,7 @@ func (m *MonitorService) loadV2RayUUIDCache() {
 		}
 	}
 
-	// Re-criar cache com tamanho conhecido para evitar realocações
-	if estimatedUsers > 0 {
-		m.v2rayUUIDCache = make(map[string]string, estimatedUsers)
-	}
+	newCache := make(map[string]string, estimatedUsers)
 
 	// Procurar por usuários na configuração
 	if inbounds, ok := config["inbounds"].([]interface{}); ok {
@@ -237,7 +355,7 @@ func (m *MonitorService) loadV2RayUUIDCache() {
 							if clientMap, ok := client.(map[string]interface{}); ok {
 								if email, ok := clientMap["email"].(string); ok {
 									if uuid, ok := clientMap["id"].(string); ok {
-										m.v2rayUUIDCache[email] = uuid
+										newCache[email] = uuid
 									}
 								}
 							}
@@ -248,18 +366,26 @@ func (m *MonitorService) loadV2RayUUIDCache() {
 		}
 	}
 
-	log.Printf("📋 Cache de UUIDs V2Ray carregado: %d usuários", len(m.v2rayUUIDCache))
+	m.mutex.Lock()
+	m.v2rayUUIDCache = newCache
+	m.mutex.Unlock()
+
+	if len(newCache) > 0 {
+		log.Printf("📋 Cache de UUIDs V2Ray carregado: %d usuários", len(newCache))
+	}
 }
 
 // getV2RayUUID busca o UUID de um usuário V2Ray pelo email
 func (m *MonitorService) getV2RayUUID(email string) string {
+	m.mutex.RLock()
+	defer m.mutex.RUnlock()
 	if uuid, exists := m.v2rayUUIDCache[email]; exists {
 		return uuid
 	}
 	return ""
 }
 
-// reloadV2RayUUIDCache recarrega o cache de UUIDs periodicamente
+// reloadV2RayUUIDCache recarrega o cache de UUIDs e verifica se o V2Ray foi instalado
 func (m *MonitorService) reloadV2RayUUIDCache() {
 	ticker := time.NewTicker(5 * time.Minute)
 	defer ticker.Stop()
@@ -267,7 +393,9 @@ func (m *MonitorService) reloadV2RayUUIDCache() {
 	for {
 		select {
 		case <-ticker.C:
-			m.loadV2RayUUIDCache()
+			if m.ensureV2RayConfigAndLogs() {
+				m.loadV2RayUUIDCache()
+			}
 		case <-m.stopChan:
 			return
 		}
@@ -426,21 +554,45 @@ func (m *MonitorService) getSSHUsersListFallback() []models.SSHUserOnline {
 
 // updateV2RayUsers atualiza o número de usuários V2Ray online
 func (m *MonitorService) updateV2RayUsers() {
-	// Tentar ler todos os arquivos de log V2Ray disponíveis
+	m.mutex.RLock()
+	available := m.v2rayAvailable
+	m.mutex.RUnlock()
+
+	if !available {
+		m.mutex.Lock()
+		m.v2rayUsers = 0
+		m.v2rayUsersList = []models.V2RayUserOnline{}
+		m.mutex.Unlock()
+		return
+	}
+
+	// Tentar ler arquivo de log atual ou procurar arquivo disponível
+	if m.currentLogPath == "" {
+		m.findV2RayLogFileSilently()
+	}
+
 	var allContent strings.Builder
 	var foundLogPath string
 
-	for _, logPath := range m.v2rayLogPaths {
-		if content, err := os.ReadFile(logPath); err == nil {
+	if m.currentLogPath != "" {
+		if content, err := os.ReadFile(m.currentLogPath); err == nil {
 			allContent.WriteString(string(content))
-			allContent.WriteString("\n")
-			foundLogPath = logPath
-			break // Usar o primeiro arquivo encontrado
+			foundLogPath = m.currentLogPath
 		}
 	}
 
 	if allContent.Len() == 0 {
-		log.Printf("❌ Nenhum arquivo de log V2Ray encontrado nos caminhos: %v", m.v2rayLogPaths)
+		for _, logPath := range m.v2rayLogPaths {
+			if content, err := os.ReadFile(logPath); err == nil {
+				allContent.WriteString(string(content))
+				foundLogPath = logPath
+				m.currentLogPath = logPath
+				break
+			}
+		}
+	}
+
+	if allContent.Len() == 0 {
 		m.mutex.Lock()
 		m.v2rayUsers = 0
 		m.v2rayUsersList = []models.V2RayUserOnline{}
