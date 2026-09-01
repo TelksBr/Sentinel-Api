@@ -10,6 +10,7 @@ type SSHServiceInterface interface {
 	UpdateValidate(username string, days int) models.SSHUserResponse
 	DeleteUsers(usernames []string) models.SSHUserCreateResponse
 	DeleteAllUsers() models.SSHUserCreateResponse
+	DeleteExpiredUsers() models.SSHUserCreateResponse
 	DisableUser(username string) models.SSHUserResponse
 	EnableUser(username string, days *int) models.SSHUserResponse
 }

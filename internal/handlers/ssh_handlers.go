@@ -250,3 +250,28 @@ func (h *SSHHandlers) DeleteAllUsers(c *gin.Context) {
 
 	c.JSON(status, result)
 }
+
+// DeleteExpiredUsers deleta todos os usuários SSH expirados
+func (h *SSHHandlers) DeleteExpiredUsers(c *gin.Context) {
+	result := h.sshService.DeleteExpiredUsers()
+
+	// Remover eventuais cronjobs pendentes de usuários deletados
+	if len(result.Details) > 0 {
+		deletedUsernames := make([]string, 0, len(result.Details))
+		for _, d := range result.Details {
+			if d.Success {
+				deletedUsernames = append(deletedUsernames, d.Username)
+			}
+		}
+		if len(deletedUsernames) > 0 {
+			_, _ = h.cronService.RemovePendingSSHTestCronjobs(deletedUsernames)
+		}
+	}
+
+	status := http.StatusOK
+	if result.Error {
+		status = http.StatusBadRequest
+	}
+
+	c.JSON(status, result)
+}

@@ -92,3 +92,60 @@ func TestMonitorService_V2RayAutoConfigureLog(t *testing.T) {
 		t.Errorf("UUID esperado '550e8400-e29b-41d4-a716-446655440000', obteve '%s'", uuid)
 	}
 }
+
+func TestMonitorService_GetSystemResourcesAccountsCount(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "v2ray_monitor_res_test_*")
+	if err != nil {
+		t.Fatalf("Erro ao criar tempDir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	configPath := filepath.Join(tempDir, "config.json")
+	initialJSON := map[string]interface{}{
+		"inbounds": []interface{}{
+			map[string]interface{}{
+				"port":     443,
+				"protocol": "vless",
+				"settings": map[string]interface{}{
+					"clients": []interface{}{
+						map[string]interface{}{
+							"id":              "uuid-active-1",
+							"email":           "active1@test.com",
+							"expiration_date": "2035-01-01T00:00:00Z",
+						},
+						map[string]interface{}{
+							"id":              "uuid-expired-1",
+							"email":           "expired1@test.com",
+							"expiration_date": "2020-01-01T00:00:00Z",
+						},
+					},
+				},
+			},
+		},
+	}
+
+	data, _ := json.MarshalIndent(initialJSON, "", "  ")
+	_ = os.WriteFile(configPath, data, 0644)
+
+	monitor := NewMonitorService(configPath)
+	totalV2Ray, expiredV2Ray := monitor.getV2RayAccountsCount()
+
+	if totalV2Ray != 2 {
+		t.Errorf("Esperava 2 contas V2Ray totais, obteve %d", totalV2Ray)
+	}
+	if expiredV2Ray != 1 {
+		t.Errorf("Esperava 1 conta V2Ray expirada, obteve %d", expiredV2Ray)
+	}
+
+	res := monitor.GetSystemResources()
+	if res.Accounts.TotalV2Ray != 2 {
+		t.Errorf("Accounts.TotalV2Ray esperado 2, obteve %d", res.Accounts.TotalV2Ray)
+	}
+	if res.Accounts.ExpiredV2Ray != 1 {
+		t.Errorf("Accounts.ExpiredV2Ray esperado 1, obteve %d", res.Accounts.ExpiredV2Ray)
+	}
+	if res.TotalExpired < 1 {
+		t.Errorf("TotalExpired esperado >= 1, obteve %d", res.TotalExpired)
+	}
+}
+

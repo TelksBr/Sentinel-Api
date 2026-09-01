@@ -129,7 +129,7 @@
           "host": ["{{baseUrl}}"],
           "path": ["system", "resources"]
         },
-        "description": "Retorna informações de recursos do sistema (memória, CPU e contagem total de contas criadas SSH/V2Ray). Rota pública (sem autenticação)."
+        "description": "Retorna informações de recursos do sistema (memória, CPU e contagem de contas ativas e expiradas SSH/V2Ray). Rota pública (sem autenticação)."
       },
       "response": [
         {
@@ -153,7 +153,7 @@
             }
           ],
           "cookie": [],
-          "body": "{\n  \"memory\": {\n    \"total\": 591784,\n    \"available\": 398452,\n    \"used\": 193332,\n    \"free\": 20452,\n    \"usage_percent\": 32.67\n  },\n  \"cpu\": {\n    \"cores\": 6,\n    \"usage_percent\": 2.15,\n    \"user\": 12450,\n    \"nice\": 0,\n    \"system\": 3410,\n    \"idle\": 592810,\n    \"iowait\": 120,\n    \"irq\": 0,\n    \"softirq\": 45,\n    \"steal\": 0\n  },\n  \"total_accounts\": 5000,\n  \"accounts\": {\n    \"total_ssh\": 5000,\n    \"total_v2ray\": 0,\n    \"total\": 5000\n  }\n}"
+          "body": "{\n  \"memory\": {\n    \"total\": 591784,\n    \"available\": 398452,\n    \"used\": 193332,\n    \"free\": 20452,\n    \"usage_percent\": 32.67\n  },\n  \"cpu\": {\n    \"cores\": 6,\n    \"usage_percent\": 2.15,\n    \"user\": 12450,\n    \"nice\": 0,\n    \"system\": 3410,\n    \"idle\": 592810,\n    \"iowait\": 120,\n    \"irq\": 0,\n    \"softirq\": 45,\n    \"steal\": 0\n  },\n  \"total_accounts\": 5000,\n  \"total_expired\": 12,\n  \"accounts\": {\n    \"total_ssh\": 5000,\n    \"total_v2ray\": 0,\n    \"total\": 5000,\n    \"expired_ssh\": 12,\n    \"expired_v2ray\": 0,\n    \"total_expired\": 12\n  }\n}"
         }
       ]
     },
@@ -393,6 +393,56 @@
             },
             "description": "Deleta TODOS os usuários SSH do servidor (retorna estatísticas detalhadas)"
           }
+        },
+        {
+          "name": "Deletar Usuários SSH Expirados",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/ssh_user/delete_expired",
+              "host": ["{{baseUrl}}"],
+              "path": ["ssh_user", "delete_expired"]
+            },
+            "description": "Deleta todos os usuários SSH expirados do servidor (retorna estatísticas e lista detalhada de usuários removidos)"
+          },
+          "response": [
+            {
+              "name": "Success",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{apiKey}}",
+                    "type": "text"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/ssh_user/delete_expired",
+                  "host": ["{{baseUrl}}"],
+                  "path": ["ssh_user", "delete_expired"]
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "cookie": [],
+              "body": "{\n  \"error\": false,\n  \"message\": \"2 usuário(s) SSH expirado(s) deletado(s) com sucesso\",\n  \"details\": [\n    {\n      \"username\": \"usuario1\",\n      \"success\": true,\n      \"message\": \"User deleted successfully (expired)\"\n    },\n    {\n      \"username\": \"usuario2\",\n      \"success\": true,\n      \"message\": \"User deleted successfully (expired)\"\n    }\n  ],\n  \"total_before\": 15,\n  \"total_deleted\": 2,\n  \"total_after\": 13\n}"
+            }
+          ]
         }
       ]
     },

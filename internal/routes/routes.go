@@ -45,13 +45,14 @@ func SetupRoutes(sshService *services.SSHService, v2rayService *services.V2RaySe
 		// Rotas SSH
 		ssh := authorized.Group("/ssh_user")
 		{
-			ssh.POST("", sshHandlers.CreateUsers)                  // POST /ssh_user
-			ssh.PUT("/:username", sshHandlers.UpdateUser)          // PUT /ssh_user/:username
-			ssh.POST("/delete", sshHandlers.DeleteUsers)           // POST /ssh_user/delete
-			ssh.POST("/delete_all", sshHandlers.DeleteAllUsers)    // POST /ssh_user/delete_all
-			ssh.POST("/test", sshHandlers.CreateTestUser)          // POST /ssh_user/test
-			ssh.PUT("/disable/:username", sshHandlers.DisableUser) // PUT /ssh_user/disable/:username
-			ssh.PUT("/enable/:username", sshHandlers.EnableUser)   // PUT /ssh_user/enable/:username
+			ssh.POST("", sshHandlers.CreateUsers)                       // POST /ssh_user
+			ssh.PUT("/:username", sshHandlers.UpdateUser)               // PUT /ssh_user/:username
+			ssh.POST("/delete", sshHandlers.DeleteUsers)                // POST /ssh_user/delete
+			ssh.POST("/delete_all", sshHandlers.DeleteAllUsers)         // POST /ssh_user/delete_all
+			ssh.POST("/delete_expired", sshHandlers.DeleteExpiredUsers) // POST /ssh_user/delete_expired
+			ssh.POST("/test", sshHandlers.CreateTestUser)               // POST /ssh_user/test
+			ssh.PUT("/disable/:username", sshHandlers.DisableUser)      // PUT /ssh_user/disable/:username
+			ssh.PUT("/enable/:username", sshHandlers.EnableUser)        // PUT /ssh_user/enable/:username
 		}
 
 		// Rotas V2Ray

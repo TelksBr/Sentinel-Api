@@ -240,3 +240,93 @@ func TestUnixStore_CountSSHUsers(t *testing.T) {
 		t.Errorf("CountTotalSSHUsers esperava 6 usuários SSH, obteve %d", count)
 	}
 }
+
+func TestUnixStore_CountExpiredSSHUsers(t *testing.T) {
+	tempDir, cleanup := createMockUnixEnv(t)
+	defer cleanup()
+
+	store := NewUnixStore(tempDir)
+	if err := store.Load(); err != nil {
+		t.Fatalf("Erro ao carregar store: %v", err)
+	}
+
+	// existinguser no mock tem ExpireDays: "19850" (no passado) -> expirado = 1
+	if count := store.CountExpiredSSHUsers(); count != 1 {
+		t.Errorf("Esperava 1 usuário expirado, obteve %d", count)
+	}
+	if count := CountTotalExpiredSSHUsers(tempDir); count != 1 {
+		t.Errorf("CountTotalExpiredSSHUsers esperava 1, obteve %d", count)
+	}
+
+	// Adicionar 1 expirado, 1 válido, 1 sem expiração, 1 expirado com bash
+	store.UpsertUser("exp1", "$6$hash", 2001, 2001, "1000", "/bin/false")
+	store.UpsertUser("val1", "$6$hash", 2002, 2002, DaysToShadowExpireDays(30), "/bin/false")
+	store.UpsertUser("no_exp", "$6$hash", 2003, 2003, "", "/bin/false")
+	store.UpsertUser("exp_bash", "$6$hash", 2004, 2004, "1000", "/bin/bash")
+	_ = store.Save()
+
+	// existinguser + exp1 = 2 expirados
+	if count := store.CountExpiredSSHUsers(); count != 2 {
+		t.Errorf("Esperava 2 usuários SSH expirados no store, obteve %d", count)
+	}
+	if count := CountTotalExpiredSSHUsers(tempDir); count != 2 {
+		t.Errorf("CountTotalExpiredSSHUsers esperava 2, obteve %d", count)
+	}
+}
+
+func TestUnixStore_DeleteExpiredUsers(t *testing.T) {
+	tempDir, cleanup := createMockUnixEnv(t)
+	defer cleanup()
+
+	store := NewUnixStore(tempDir)
+	if err := store.Load(); err != nil {
+		t.Fatalf("Erro ao carregar store: %v", err)
+	}
+
+	// existinguser no mock tem ExpireDays: "19850" (no passado)
+	// Vamos adicionar:
+	// - expired1 (expirado: 1000 dias atrás)
+	// - valid1 (válido: 30 dias no futuro)
+	// - no_expire (sem data de expiração: "")
+	// - expired_bash (expirado mas com shell /bin/bash -> não deve ser deletado)
+	store.UpsertUser("expired1", "$6$hash", 2001, 2001, "1000", "/bin/false")
+	store.UpsertUser("valid1", "$6$hash", 2002, 2002, DaysToShadowExpireDays(30), "/bin/false")
+	store.UpsertUser("no_expire", "$6$hash", 2003, 2003, "", "/bin/false")
+	store.UpsertUser("expired_bash", "$6$hash", 2004, 2004, "1000", "/bin/bash")
+	_ = store.Save()
+
+	deletedUsernames, deletedUIDs, totalDeleted := store.DeleteExpiredUsers()
+
+	// existinguser (19850 < hoje) e expired1 (1000 < hoje) devem ser deletados
+	if totalDeleted != 2 {
+		t.Errorf("Esperava 2 usuários deletados, obteve %d (%v)", totalDeleted, deletedUsernames)
+	}
+
+	if len(deletedUIDs) != 2 {
+		t.Errorf("Esperava 2 UIDs deletados, obteve %d", len(deletedUIDs))
+	}
+
+	_ = store.Save()
+
+	// Recarregar do disco e verificar
+	store2 := NewUnixStore(tempDir)
+	if err := store2.Load(); err != nil {
+		t.Fatalf("Erro ao recarregar store: %v", err)
+	}
+
+	for _, username := range []string{"existinguser", "expired1"} {
+		if _, exists := store2.passwdMap[username]; exists {
+			t.Errorf("Usuário expirado %s ainda existe no passwd", username)
+		}
+		if _, exists := store2.shadowMap[username]; exists {
+			t.Errorf("Usuário expirado %s ainda existe no shadow", username)
+		}
+	}
+
+	for _, username := range []string{"root", "daemon", "sshd", "valid1", "no_expire", "expired_bash"} {
+		if _, exists := store2.passwdMap[username]; !exists {
+			t.Errorf("Usuário %s deveria ter sido preservado no passwd", username)
+		}
+	}
+}
+

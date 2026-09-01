@@ -646,3 +646,77 @@ func (s *SSHService) DeleteAllUsers() models.SSHUserCreateResponse {
 		TotalAfter:   len(s.store.Passwd),
 	}
 }
+
+// DeleteExpiredUsers deleta todos os usuários SSH não-sistema cuja data de expiração já passou
+func (s *SSHService) DeleteExpiredUsers() models.SSHUserCreateResponse {
+	log.Println("🗑️ Iniciando deleção de usuários SSH expirados...")
+	start := time.Now()
+
+	unlock, err := s.store.Lock()
+	if err != nil {
+		return models.SSHUserCreateResponse{
+			Error:   true,
+			Message: fmt.Sprintf("Erro ao adquirir lock do sistema: %v", err),
+			Details: []models.SSHUserResponse{},
+		}
+	}
+	defer unlock()
+
+	if err := s.store.Load(); err != nil {
+		return models.SSHUserCreateResponse{
+			Error:   true,
+			Message: fmt.Sprintf("Erro ao ler arquivos de usuários: %v", err),
+			Details: []models.SSHUserResponse{},
+		}
+	}
+
+	totalBefore := len(s.store.Passwd)
+
+	deletedUsernames, deletedUIDs, totalDeleted := s.store.DeleteExpiredUsers()
+	if totalDeleted == 0 {
+		return models.SSHUserCreateResponse{
+			Error:        false,
+			Message:      "Nenhum usuário SSH expirado encontrado para deletar",
+			Details:      []models.SSHUserResponse{},
+			TotalBefore:  totalBefore,
+			TotalDeleted: 0,
+			TotalAfter:   totalBefore,
+		}
+	}
+
+	if err := s.store.Save(); err != nil {
+		return models.SSHUserCreateResponse{
+			Error:   true,
+			Message: fmt.Sprintf("Erro ao persistir remoção de usuários expirados: %v", err),
+			Details: []models.SSHUserResponse{},
+		}
+	}
+
+	// Encerrar túneis/sessões de todos os UIDs expirados em lote
+	utils.TerminateUserSessionsByUIDs(deletedUIDs)
+
+	// Limpar backups de expiração dos usuários deletados
+	_ = utils.RemoveExpirationBackups(deletedUsernames)
+
+	details := make([]models.SSHUserResponse, 0, len(deletedUsernames))
+	for _, u := range deletedUsernames {
+		details = append(details, models.SSHUserResponse{
+			Username: u,
+			Success:  true,
+			Message:  "User deleted successfully (expired)",
+		})
+	}
+
+	elapsed := time.Since(start)
+	log.Printf("✅ Deleção de %d usuários SSH expirados concluída em %s", totalDeleted, elapsed)
+
+	return models.SSHUserCreateResponse{
+		Error:        false,
+		Message:      fmt.Sprintf("%d usuário(s) SSH expirado(s) deletado(s) com sucesso", totalDeleted),
+		Details:      details,
+		TotalBefore:  totalBefore,
+		TotalDeleted: totalDeleted,
+		TotalAfter:   len(s.store.Passwd),
+	}
+}
+

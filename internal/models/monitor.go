@@ -66,14 +66,18 @@ type SystemResources struct {
 	Memory        MemoryInfo   `json:"memory"`
 	CPU           CPUInfo      `json:"cpu"`
 	TotalAccounts int          `json:"total_accounts"`
+	TotalExpired  int          `json:"total_expired"`
 	Accounts      AccountsInfo `json:"accounts"`
 }
 
 // AccountsInfo representa o resumo de todas as contas cadastradas no servidor
 type AccountsInfo struct {
-	TotalSSH   int `json:"total_ssh"`
-	TotalV2Ray int `json:"total_v2ray"`
-	Total      int `json:"total"`
+	TotalSSH     int `json:"total_ssh"`
+	TotalV2Ray   int `json:"total_v2ray"`
+	Total        int `json:"total"`
+	ExpiredSSH   int `json:"expired_ssh"`
+	ExpiredV2Ray int `json:"expired_v2ray"`
+	TotalExpired int `json:"total_expired"`
 }
 
 // MemoryInfo representa informações de memória

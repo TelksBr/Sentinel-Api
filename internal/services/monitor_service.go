@@ -875,7 +875,7 @@ func (m *MonitorService) extractTimestampFromLog(line string) time.Time {
 	return time.Time{}
 }
 
-// GetSystemResources retorna informações de recursos do sistema (CPU, RAM e total de contas criadas)
+// GetSystemResources retorna informações de recursos do sistema (CPU, RAM e total de contas criadas/expiradas)
 func (m *MonitorService) GetSystemResources() models.SystemResources {
 	memInfo := m.getMemoryInfo()
 	cpuInfo := m.getCPUInfo()
@@ -885,23 +885,91 @@ func (m *MonitorService) GetSystemResources() models.SystemResources {
 		Memory:        memInfo,
 		CPU:           cpuInfo,
 		TotalAccounts: accountsInfo.Total,
+		TotalExpired:  accountsInfo.TotalExpired,
 		Accounts:      accountsInfo,
 	}
 }
 
-// getAccountsInfo obtém a contagem de contas criadas (SSH e V2Ray)
+// getAccountsInfo obtém a contagem de contas criadas e expiradas (SSH e V2Ray)
 func (m *MonitorService) getAccountsInfo() models.AccountsInfo {
 	totalSSH := utils.CountTotalSSHUsers()
+	expiredSSH := utils.CountTotalExpiredSSHUsers()
 
-	m.mutex.RLock()
-	totalV2Ray := len(m.v2rayUUIDCache)
-	m.mutex.RUnlock()
+	totalV2Ray, expiredV2Ray := m.getV2RayAccountsCount()
 
 	return models.AccountsInfo{
-		TotalSSH:   totalSSH,
-		TotalV2Ray: totalV2Ray,
-		Total:      totalSSH + totalV2Ray,
+		TotalSSH:     totalSSH,
+		TotalV2Ray:   totalV2Ray,
+		Total:        totalSSH + totalV2Ray,
+		ExpiredSSH:   expiredSSH,
+		ExpiredV2Ray: expiredV2Ray,
+		TotalExpired: expiredSSH + expiredV2Ray,
 	}
+}
+
+// getV2RayAccountsCount obtém a contagem de contas V2Ray totais e expiradas
+func (m *MonitorService) getV2RayAccountsCount() (total int, expired int) {
+	if m.v2rayConfigPath == "" {
+		return 0, 0
+	}
+	content, err := os.ReadFile(m.v2rayConfigPath)
+	if err != nil {
+		m.mutex.RLock()
+		total = len(m.v2rayUUIDCache)
+		m.mutex.RUnlock()
+		return total, 0
+	}
+	var config map[string]interface{}
+	if err := json.Unmarshal(content, &config); err != nil {
+		m.mutex.RLock()
+		total = len(m.v2rayUUIDCache)
+		m.mutex.RUnlock()
+		return total, 0
+	}
+
+	now := time.Now().Truncate(time.Minute)
+	inbounds, ok := config["inbounds"].([]interface{})
+	if !ok {
+		return 0, 0
+	}
+
+	seenUUIDs := make(map[string]bool)
+	for _, inbound := range inbounds {
+		inboundMap, ok := inbound.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		settings, ok := inboundMap["settings"].(map[string]interface{})
+		if !ok {
+			continue
+		}
+		clients, ok := settings["clients"].([]interface{})
+		if !ok {
+			continue
+		}
+		for _, c := range clients {
+			clientMap, ok := c.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			uuid, _ := clientMap["id"].(string)
+			if uuid != "" && seenUUIDs[uuid] {
+				continue
+			}
+			if uuid != "" {
+				seenUUIDs[uuid] = true
+			}
+			total++
+			if expStr, ok := clientMap["expiration_date"].(string); ok && expStr != "" {
+				if expTime, err := time.Parse(time.RFC3339, expStr); err == nil {
+					if !expTime.After(now) {
+						expired++
+					}
+				}
+			}
+		}
+	}
+	return total, expired
 }
 
 // getMemoryInfo obtém informações de memória usando cat /proc/meminfo

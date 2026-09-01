@@ -188,3 +188,63 @@ func TestSSHService_TestUser(t *testing.T) {
 		t.Errorf("Cronjob não registrado corretamente: %v", cronMock.addedJobs)
 	}
 }
+
+func TestSSHService_DeleteExpiredUsers(t *testing.T) {
+	service, cleanup := setupTestSSHService(t)
+	defer cleanup()
+
+	// existing1 no mock tem ExpireDays: 19850 (no passado)
+	// Vamos criar um usuário ativo (validade 30 dias)
+	validUser := models.SSHUser{
+		Username:     "usuario_ativo",
+		Password:     "senhaAtiva123",
+		ValidateDays: 30,
+	}
+	respCreate := service.CreateUsers([]models.SSHUser{validUser})
+	if respCreate.Error {
+		t.Fatalf("Erro ao criar usuário ativo: %s", respCreate.Message)
+	}
+
+	// Deletar expirados
+	respDel := service.DeleteExpiredUsers()
+	if respDel.Error {
+		t.Fatalf("Erro ao deletar usuários expirados: %s", respDel.Message)
+	}
+
+	if respDel.TotalDeleted != 1 {
+		t.Errorf("Esperava 1 usuário expirado deletado (existing1), obteve %d", respDel.TotalDeleted)
+	}
+
+	if len(respDel.Details) != 1 || respDel.Details[0].Username != "existing1" {
+		t.Errorf("Detalhe de deleção inesperado: %v", respDel.Details)
+	}
+
+	// Chamar novamente (não deve haver mais nenhum expirado)
+	respDel2 := service.DeleteExpiredUsers()
+	if respDel2.Error {
+		t.Fatalf("Erro na segunda chamada de DeleteExpiredUsers: %s", respDel2.Message)
+	}
+	if respDel2.TotalDeleted != 0 {
+		t.Errorf("Esperava 0 deletados na segunda chamada, obteve %d", respDel2.TotalDeleted)
+	}
+
+	// Verificar se usuario_ativo, root e sshd ainda existem
+	_ = service.store.Load()
+	foundAtivo := false
+	foundExisting1 := false
+	for _, p := range service.store.Passwd {
+		if p.Username == "usuario_ativo" {
+			foundAtivo = true
+		}
+		if p.Username == "existing1" {
+			foundExisting1 = true
+		}
+	}
+	if !foundAtivo {
+		t.Errorf("usuario_ativo deveria continuar existindo no passwd")
+	}
+	if foundExisting1 {
+		t.Errorf("existing1 não deveria mais existir no passwd")
+	}
+}
+
