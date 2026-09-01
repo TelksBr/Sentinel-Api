@@ -3,7 +3,7 @@
     "name": "Sentinel API",
     "description": "Coleção completa da Sentinel API - Gerenciamento de usuários SSH, V2Ray e DT-Proto",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
-    "version": "1.2.0"
+    "version": "2.0.0"
   },
   "variable": [
     {
@@ -120,7 +120,7 @@
       ]
     },
     {
-      "name": "Recursos do Sistema (CPU e RAM)",
+      "name": "Recursos do Sistema (CPU, RAM e Contas)",
       "request": {
         "method": "GET",
         "header": [],
@@ -129,8 +129,33 @@
           "host": ["{{baseUrl}}"],
           "path": ["system", "resources"]
         },
-        "description": "Retorna informações de recursos do sistema (memória e CPU). Rota pública (sem autenticação)."
-      }
+        "description": "Retorna informações de recursos do sistema (memória, CPU e contagem total de contas criadas SSH/V2Ray). Rota pública (sem autenticação)."
+      },
+      "response": [
+        {
+          "name": "Success",
+          "originalRequest": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/system/resources",
+              "host": ["{{baseUrl}}"],
+              "path": ["system", "resources"]
+            }
+          },
+          "status": "OK",
+          "code": 200,
+          "_postman_previewlanguage": "json",
+          "header": [
+            {
+              "key": "Content-Type",
+              "value": "application/json"
+            }
+          ],
+          "cookie": [],
+          "body": "{\n  \"memory\": {\n    \"total\": 591784,\n    \"available\": 398452,\n    \"used\": 193332,\n    \"free\": 20452,\n    \"usage_percent\": 32.67\n  },\n  \"cpu\": {\n    \"cores\": 6,\n    \"usage_percent\": 2.15,\n    \"user\": 12450,\n    \"nice\": 0,\n    \"system\": 3410,\n    \"idle\": 592810,\n    \"iowait\": 120,\n    \"irq\": 0,\n    \"softirq\": 45,\n    \"steal\": 0\n  },\n  \"total_accounts\": 5000,\n  \"accounts\": {\n    \"total_ssh\": 5000,\n    \"total_v2ray\": 0,\n    \"total\": 5000\n  }\n}"
+        }
+      ]
     },
     {
       "name": "SSH Users",
