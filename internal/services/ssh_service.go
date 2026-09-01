@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"runtime"
 	"time"
 
 	"api-v2/internal/models"
@@ -16,23 +17,135 @@ type TestCronjobScheduler interface {
 	AddTestCronjob(id, cronType string, hoursFromNow int) error
 }
 
-// SSHService implementa os serviços SSH
-type SSHService struct{}
+// SSHService implementa os serviços SSH de alta performance com manipulação direta de arquivos Unix.
+type SSHService struct {
+	store *utils.UnixStore
+}
 
 // NewSSHService cria uma nova instância do serviço SSH
 func NewSSHService() *SSHService {
-	return &SSHService{}
+	return &SSHService{
+		store: utils.DefaultUnixStore,
+	}
 }
 
-// CreateUsers cria usuários SSH
-func (s *SSHService) CreateUsers(users []models.SSHUser) models.SSHUserCreateResponse {
-	results := []models.SSHUserResponse{}
-	log.Printf("Iniciando criação de usuários SSH.")
+// SetStore permite injetar um store customizado (usado principalmente em testes)
+func (s *SSHService) SetStore(store *utils.UnixStore) {
+	s.store = store
+}
 
-	for _, user := range users {
-		result := s.createSingleUser(user)
-		results = append(results, result)
+// CreateUsers cria múltiplos usuários SSH em uma única transação atômica
+func (s *SSHService) CreateUsers(users []models.SSHUser) models.SSHUserCreateResponse {
+	if len(users) == 0 {
+		return models.SSHUserCreateResponse{
+			Error:   false,
+			Message: "Nenhum usuário para criar",
+			Details: []models.SSHUserResponse{},
+		}
 	}
+
+	log.Printf("🚀 Iniciando criação atômica em lote de %d usuários SSH...", len(users))
+	start := time.Now()
+
+	results := make([]models.SSHUserResponse, len(users))
+	validIndices := make([]int, 0, len(users))
+	passwordsToHash := make([]string, 0, len(users))
+
+	// 1. Pré-validação rápida de usernames
+	for i, user := range users {
+		if utils.IsReservedUsername(user.Username) {
+			errMsg := fmt.Sprintf("Reserved username cannot be used: %s", user.Username)
+			utils.WriteLog(errMsg)
+			results[i] = models.SSHUserResponse{
+				Username: user.Username,
+				Success:  false,
+				Message:  errMsg,
+			}
+			continue
+		}
+		validIndices = append(validIndices, i)
+		passwordsToHash = append(passwordsToHash, user.Password)
+	}
+
+	// 2. Gerar hashes SHA-512 em paralelo em todos os núcleos da CPU
+	numWorkers := runtime.NumCPU()
+	if numWorkers < 2 {
+		numWorkers = 2
+	}
+	hashes, err := utils.BatchSha512Crypt(passwordsToHash, numWorkers)
+	if err != nil {
+		log.Printf("❌ Erro ao computar hashes das senhas: %v", err)
+		return models.SSHUserCreateResponse{
+			Error:   true,
+			Message: fmt.Sprintf("Erro ao gerar hashes de senha: %v", err),
+			Details: results,
+		}
+	}
+
+	// 3. Bloqueio global e atualização em memória dos arquivos do Unix
+	unlock, err := s.store.Lock()
+	if err != nil {
+		log.Printf("❌ Erro ao adquirir lock do UnixStore: %v", err)
+		return models.SSHUserCreateResponse{
+			Error:   true,
+			Message: fmt.Sprintf("Erro ao adquirir lock do sistema: %v", err),
+			Details: results,
+		}
+	}
+	defer unlock()
+
+	if err := s.store.Load(); err != nil {
+		log.Printf("❌ Erro ao carregar tabelas do UnixStore: %v", err)
+		return models.SSHUserCreateResponse{
+			Error:   true,
+			Message: fmt.Sprintf("Erro ao ler arquivos de usuários do sistema: %v", err),
+			Details: results,
+		}
+	}
+
+	// 4. Inserir/Atualizar cada usuário no store
+	for idx, originalIndex := range validIndices {
+		user := users[originalIndex]
+		hash := hashes[idx]
+
+		if s.store.IsSystemUser(user.Username) {
+			errMsg := fmt.Sprintf("Reserved/system username cannot be used: %s", user.Username)
+			results[originalIndex] = models.SSHUserResponse{
+				Username: user.Username,
+				Success:  false,
+				Message:  errMsg,
+			}
+			continue
+		}
+
+		var expireDays string
+		if user.IsTest && user.Time > 0 {
+			expireDays = utils.HoursToShadowExpireDays(user.Time)
+		} else {
+			expireDays = utils.DaysToShadowExpireDays(user.ValidateDays)
+		}
+
+		s.store.UpsertUser(user.Username, hash, 0, 0, expireDays, "/bin/false")
+
+		results[originalIndex] = models.SSHUserResponse{
+			Username: user.Username,
+			Success:  true,
+			Message:  "User created successfully",
+		}
+	}
+
+	// 5. Escrita atômica em disco
+	if err := s.store.Save(); err != nil {
+		log.Printf("❌ Erro ao salvar tabelas Unix: %v", err)
+		return models.SSHUserCreateResponse{
+			Error:   true,
+			Message: fmt.Sprintf("Erro ao persistir arquivos de usuários: %v", err),
+			Details: results,
+		}
+	}
+
+	elapsed := time.Since(start)
+	log.Printf("✅ Criação de %d usuários SSH concluída com sucesso em %s", len(users), elapsed)
 
 	// Verificar se houve erros
 	hasErrors := false
@@ -55,123 +168,90 @@ func (s *SSHService) CreateUsers(users []models.SSHUser) models.SSHUserCreateRes
 	}
 }
 
-// createSingleUser cria um único usuário SSH
-func (s *SSHService) createSingleUser(user models.SSHUser) models.SSHUserResponse {
-	// Validar username reservado
-	if utils.IsReservedUsername(user.Username) {
-		errorMessage := fmt.Sprintf("Reserved username cannot be used: %s", user.Username)
-		utils.WriteLog(errorMessage)
-		return models.SSHUserResponse{
-			Username: user.Username,
-			Success:  false,
-			Message:  errorMessage,
-		}
-	}
-
-	// Verificar se usuário já existe
-	userExists, err := utils.CheckUserExists(user.Username)
-	if err != nil {
-		errorMessage := fmt.Sprintf("Error checking if user exists: %v", err)
-		utils.WriteLog(errorMessage)
-		return models.SSHUserResponse{
-			Username: user.Username,
-			Success:  false,
-			Message:  errorMessage,
-		}
-	}
-
-	// Se usuário existe, deletar primeiro
-	if userExists {
-		if err := utils.DeleteUser(user.Username); err != nil {
-			errorMessage := fmt.Sprintf("Error deleting existing user: %v", err)
-			utils.WriteLog(errorMessage)
-			return models.SSHUserResponse{
-				Username: user.Username,
-				Success:  false,
-				Message:  errorMessage,
-			}
-		}
-		// Aguardar um pouco após deletar
-		time.Sleep(100 * time.Millisecond)
-	}
-
-	// Calcular data de expiração
-	expirationDate, err := utils.CalculateExpirationDate(user.ValidateDays)
-	if err != nil {
-		errorMessage := fmt.Sprintf("Error calculating expiration date: %v", err)
-		utils.WriteLog(errorMessage)
-		return models.SSHUserResponse{
-			Username: user.Username,
-			Success:  false,
-			Message:  errorMessage,
-		}
-	}
-
-	// Criar usuário
-	if err := utils.CreateUser(user.Username, user.Password, expirationDate); err != nil {
-		errorMessage := fmt.Sprintf("Error creating user: %v", err)
-		utils.WriteLog(errorMessage)
-		return models.SSHUserResponse{
-			Username: user.Username,
-			Success:  false,
-			Message:  errorMessage,
-		}
-	}
-
-	return models.SSHUserResponse{
-		Username: user.Username,
-		Success:  true,
-		Message:  "User created successfully",
-	}
-}
-
-// CreateTestUser cria um usuário de teste SSH
+// CreateTestUser cria um usuário de teste SSH e agenda sua remoção
 func (s *SSHService) CreateTestUser(request models.SSHUserTestRequest, cronService TestCronjobScheduler) models.SSHUserCreateResponse {
-	// Criar usuário de teste
 	testUser := models.SSHUser{
 		Username:     request.Username,
 		Password:     request.Password,
 		Limit:        0,
-		ValidateDays: 3, // 3 dias para usuário de teste (máximo 72 horas)
+		ValidateDays: 3, // 3 dias como margem de segurança no shadow
 		IsTest:       true,
 		Time:         request.Time,
 	}
 
-	// Criar usuário
-	result := s.createSingleUser(testUser)
+	resp := s.CreateUsers([]models.SSHUser{testUser})
 
 	// Se criou com sucesso, agendar remoção via cronjob
-	if result.Success {
-		err := cronService.AddTestCronjob(request.Username, "ssh", request.Time)
-		if err != nil {
-			log.Printf("Erro ao agendar remoção de usuário teste %s: %v", request.Username, err)
+	if !resp.Error && len(resp.Details) > 0 && resp.Details[0].Success {
+		if err := cronService.AddTestCronjob(request.Username, "ssh", request.Time); err != nil {
+			log.Printf("⚠️ Erro ao agendar remoção de usuário teste %s: %v", request.Username, err)
 		} else {
-			log.Printf("Usuário teste %s criado e agendado para remoção em %d horas", request.Username, request.Time)
+			log.Printf("⏰ Usuário teste %s criado e agendado para remoção em %d horas", request.Username, request.Time)
 		}
 	}
 
-	return models.SSHUserCreateResponse{
-		Error:   !result.Success,
-		Message: result.Message,
-		Details: []models.SSHUserResponse{result},
-	}
+	return resp
 }
 
 // UpdatePassword atualiza a senha de um usuário SSH
 func (s *SSHService) UpdatePassword(username, password string) models.SSHUserResponse {
-	// Verificar se usuário existe
-	userExists, err := utils.CheckUserExists(username)
-	if err != nil {
-		errorMessage := fmt.Sprintf("Error checking if user exists: %v", err)
-		utils.WriteLog(errorMessage)
+	if utils.IsReservedUsername(username) {
 		return models.SSHUserResponse{
 			Username: username,
 			Success:  false,
-			Message:  errorMessage,
+			Message:  "Cannot modify reserved/system user",
 		}
 	}
 
-	if !userExists {
+	hashedPassword, err := utils.Sha512Crypt(password, "", 5000)
+	if err != nil {
+		errMsg := fmt.Sprintf("Error hashing password: %v", err)
+		utils.WriteLog(errMsg)
+		return models.SSHUserResponse{
+			Username: username,
+			Success:  false,
+			Message:  errMsg,
+		}
+	}
+
+	unlock, err := s.store.Lock()
+	if err != nil {
+		return models.SSHUserResponse{
+			Username: username,
+			Success:  false,
+			Message:  fmt.Sprintf("Error locking system files: %v", err),
+		}
+	}
+	defer unlock()
+
+	if err := s.store.Load(); err != nil {
+		return models.SSHUserResponse{
+			Username: username,
+			Success:  false,
+			Message:  fmt.Sprintf("Error loading system files: %v", err),
+		}
+	}
+
+	if s.store.IsSystemUser(username) {
+		return models.SSHUserResponse{
+			Username: username,
+			Success:  false,
+			Message:  "Cannot modify reserved/system user",
+		}
+	}
+
+	// Verificar se existe
+	found := false
+	for i := range s.store.Shadow {
+		if s.store.Shadow[i].Username == username {
+			s.store.Shadow[i].PasswordHash = hashedPassword
+			s.store.Shadow[i].LastChanged = fmt.Sprintf("%d", time.Now().Unix()/86400)
+			found = true
+			break
+		}
+	}
+
+	if !found {
 		return models.SSHUserResponse{
 			Username: username,
 			Success:  false,
@@ -179,26 +259,11 @@ func (s *SSHService) UpdatePassword(username, password string) models.SSHUserRes
 		}
 	}
 
-	// Gerar hash da nova senha
-	hashedPassword, err := utils.HashPassword(password)
-	if err != nil {
-		errorMessage := fmt.Sprintf("Error hashing password: %v", err)
-		utils.WriteLog(errorMessage)
+	if err := s.store.Save(); err != nil {
 		return models.SSHUserResponse{
 			Username: username,
 			Success:  false,
-			Message:  errorMessage,
-		}
-	}
-
-	// Atualizar senha usando usermod
-	if err := utils.ExecuteCommandQuiet("usermod", "-p", hashedPassword, username); err != nil {
-		errorMessage := fmt.Sprintf("Error updating password: %v", err)
-		utils.WriteLog(errorMessage)
-		return models.SSHUserResponse{
-			Username: username,
-			Success:  false,
-			Message:  errorMessage,
+			Message:  fmt.Sprintf("Error saving system files: %v", err),
 		}
 	}
 
@@ -211,19 +276,52 @@ func (s *SSHService) UpdatePassword(username, password string) models.SSHUserRes
 
 // UpdateValidate atualiza a validade de um usuário SSH
 func (s *SSHService) UpdateValidate(username string, days int) models.SSHUserResponse {
-	// Verificar se usuário existe
-	userExists, err := utils.CheckUserExists(username)
-	if err != nil {
-		errorMessage := fmt.Sprintf("Error checking if user exists: %v", err)
-		utils.WriteLog(errorMessage)
+	if utils.IsReservedUsername(username) {
 		return models.SSHUserResponse{
 			Username: username,
 			Success:  false,
-			Message:  errorMessage,
+			Message:  "Cannot modify reserved/system user",
 		}
 	}
 
-	if !userExists {
+	expireDays := utils.DaysToShadowExpireDays(days)
+
+	unlock, err := s.store.Lock()
+	if err != nil {
+		return models.SSHUserResponse{
+			Username: username,
+			Success:  false,
+			Message:  fmt.Sprintf("Error locking system files: %v", err),
+		}
+	}
+	defer unlock()
+
+	if err := s.store.Load(); err != nil {
+		return models.SSHUserResponse{
+			Username: username,
+			Success:  false,
+			Message:  fmt.Sprintf("Error loading system files: %v", err),
+		}
+	}
+
+	if s.store.IsSystemUser(username) {
+		return models.SSHUserResponse{
+			Username: username,
+			Success:  false,
+			Message:  "Cannot modify reserved/system user",
+		}
+	}
+
+	found := false
+	for i := range s.store.Shadow {
+		if s.store.Shadow[i].Username == username {
+			s.store.Shadow[i].ExpireDays = expireDays
+			found = true
+			break
+		}
+	}
+
+	if !found {
 		return models.SSHUserResponse{
 			Username: username,
 			Success:  false,
@@ -231,26 +329,11 @@ func (s *SSHService) UpdateValidate(username string, days int) models.SSHUserRes
 		}
 	}
 
-	// Calcular nova data de expiração
-	expirationDate, err := utils.CalculateExpirationDate(days)
-	if err != nil {
-		errorMessage := fmt.Sprintf("Error calculating expiration date: %v", err)
-		utils.WriteLog(errorMessage)
+	if err := s.store.Save(); err != nil {
 		return models.SSHUserResponse{
 			Username: username,
 			Success:  false,
-			Message:  errorMessage,
-		}
-	}
-
-	// Atualizar data de expiração
-	if err := utils.UpdateExpirationDate(username, expirationDate); err != nil {
-		errorMessage := fmt.Sprintf("Error updating expiration date: %v", err)
-		utils.WriteLog(errorMessage)
-		return models.SSHUserResponse{
-			Username: username,
-			Success:  false,
-			Message:  errorMessage,
+			Message:  fmt.Sprintf("Error saving system files: %v", err),
 		}
 	}
 
@@ -261,23 +344,103 @@ func (s *SSHService) UpdateValidate(username string, days int) models.SSHUserRes
 	}
 }
 
-// DeleteUsers deleta usuários SSH
+// DeleteUsers deleta usuários SSH em lote com encerramento imediato de túneis
 func (s *SSHService) DeleteUsers(usernames []string) models.SSHUserCreateResponse {
-	results := []models.SSHUserResponse{}
-
-	for _, username := range usernames {
-		result := s.deleteSingleUser(username)
-		results = append(results, result)
-	}
-
-	// Verificar se houve erros
-	hasErrors := false
-	for _, result := range results {
-		if !result.Success {
-			hasErrors = true
-			break
+	if len(usernames) == 0 {
+		return models.SSHUserCreateResponse{
+			Error:   false,
+			Message: "Nenhum usuário para deletar",
+			Details: []models.SSHUserResponse{},
 		}
 	}
+
+	log.Printf("🗑️ Iniciando deleção atômica de %d usuários SSH...", len(usernames))
+	start := time.Now()
+
+	unlock, err := s.store.Lock()
+	if err != nil {
+		return models.SSHUserCreateResponse{
+			Error:   true,
+			Message: fmt.Sprintf("Erro ao adquirir lock do sistema: %v", err),
+			Details: []models.SSHUserResponse{},
+		}
+	}
+	defer unlock()
+
+	if err := s.store.Load(); err != nil {
+		return models.SSHUserCreateResponse{
+			Error:   true,
+			Message: fmt.Sprintf("Erro ao ler arquivos de usuários: %v", err),
+			Details: []models.SSHUserResponse{},
+		}
+	}
+
+	totalBefore := len(s.store.Passwd)
+
+	// 1. Remover do UnixStore em memória
+	deletedUIDs, notFound, sysUsers := s.store.DeleteUsers(usernames)
+
+	// 2. Persistir alterações atomicamente
+	if err := s.store.Save(); err != nil {
+		return models.SSHUserCreateResponse{
+			Error:   true,
+			Message: fmt.Sprintf("Erro ao persistir remoção de usuários: %v", err),
+			Details: []models.SSHUserResponse{},
+		}
+	}
+
+	// 3. Encerrar sessões e túneis SSH de todos os UIDs removidos em lote (chunks de 500)
+	utils.TerminateUserSessionsByUIDs(deletedUIDs)
+
+	// 4. Limpar backups de expiração em uma única operação atômica de disco
+	_ = utils.RemoveExpirationBackups(usernames)
+
+	// 5. Montar detalhes de resposta
+	deletedSet := make(map[string]bool)
+	notFoundSet := make(map[string]bool, len(notFound))
+	for _, nf := range notFound {
+		notFoundSet[nf] = true
+	}
+	sysSet := make(map[string]bool, len(sysUsers))
+	for _, sys := range sysUsers {
+		sysSet[sys] = true
+	}
+
+	results := make([]models.SSHUserResponse, 0, len(usernames))
+	notDeleted := make([]models.SSHUserResponse, 0)
+	hasErrors := false
+
+	for _, u := range usernames {
+		if sysSet[u] {
+			hasErrors = true
+			resp := models.SSHUserResponse{
+				Username: u,
+				Success:  false,
+				Message:  "Cannot delete reserved/system user",
+			}
+			results = append(results, resp)
+			notDeleted = append(notDeleted, resp)
+		} else if notFoundSet[u] {
+			hasErrors = true
+			resp := models.SSHUserResponse{
+				Username: u,
+				Success:  false,
+				Message:  "User does not exist or was already deleted.",
+			}
+			results = append(results, resp)
+			notDeleted = append(notDeleted, resp)
+		} else {
+			deletedSet[u] = true
+			results = append(results, models.SSHUserResponse{
+				Username: u,
+				Success:  true,
+				Message:  "User deleted successfully",
+			})
+		}
+	}
+
+	elapsed := time.Since(start)
+	log.Printf("✅ Deleção de %d usuários concluída em %s (%d removidos com sucesso)", len(usernames), elapsed, len(deletedUIDs))
 
 	message := "All users deleted successfully"
 	if hasErrors {
@@ -285,160 +448,71 @@ func (s *SSHService) DeleteUsers(usernames []string) models.SSHUserCreateRespons
 	}
 
 	return models.SSHUserCreateResponse{
-		Error:   hasErrors,
-		Message: message,
-		Details: results,
+		Error:        hasErrors,
+		Message:      message,
+		Details:      results,
+		TotalBefore:  totalBefore,
+		TotalDeleted: len(deletedUIDs),
+		TotalAfter:   len(s.store.Passwd),
+		NotDeleted:   notDeleted,
 	}
 }
 
-// deleteSingleUser deleta um único usuário SSH
-// Implementação igual ao V1 para garantir fechamento instantâneo de tunnels
-func (s *SSHService) deleteSingleUser(username string) models.SSHUserResponse {
-	// Proteção contra deleção de usuários reservados/sistema
+// DisableUser desabilita um usuário SSH (bloqueio, nologin, expiração no passado e kill de processos)
+func (s *SSHService) DisableUser(username string) models.SSHUserResponse {
 	if utils.IsReservedUsername(username) {
 		return models.SSHUserResponse{
 			Username: username,
 			Success:  false,
-			Message:  "Cannot delete reserved/system user",
+			Message:  "Cannot disable reserved/system user",
 		}
 	}
 
-	// Verificar se usuário existe
-	userExists, err := utils.CheckUserExists(username)
+	unlock, err := s.store.Lock()
 	if err != nil {
-		errorMessage := fmt.Sprintf("Error checking if user exists: %v", err)
-		utils.WriteLog(errorMessage)
 		return models.SSHUserResponse{
 			Username: username,
 			Success:  false,
-			Message:  errorMessage,
+			Message:  fmt.Sprintf("Error locking system files: %v", err),
 		}
 	}
+	defer unlock()
 
-	if !userExists {
+	if err := s.store.Load(); err != nil {
 		return models.SSHUserResponse{
 			Username: username,
 			Success:  false,
-			Message:  "User does not exist or was already deleted.",
+			Message:  fmt.Sprintf("Error loading system files: %v", err),
 		}
 	}
 
-	// Capturar UID antes do userdel — túneis SSH continuam com o UID mesmo após remover a conta
-	uid, err := utils.GetUserUID(username)
-	if err != nil {
-		errorMessage := fmt.Sprintf("Error getting user UID: %v", err)
-		utils.WriteLog(errorMessage)
-		return models.SSHUserResponse{
-			Username: username,
-			Success:  false,
-			Message:  errorMessage,
-		}
-	}
-
-	// PRIMEIRO: Desativar o usuário para impedir novas conexões
-	if err := utils.ExecuteCommandQuiet("usermod", "-L", username); err != nil {
-		return models.SSHUserResponse{
-			Username: username,
-			Success:  false,
-			Message:  fmt.Sprintf("Failed to disable user %s: %v", username, err),
-		}
-	}
-	if err := utils.ExecuteCommandQuiet("usermod", "-s", "/usr/sbin/nologin", username); err != nil {
-		return models.SSHUserResponse{
-			Username: username,
-			Success:  false,
-			Message:  fmt.Sprintf("Failed to set nologin shell for user %s: %v", username, err),
-		}
-	}
-
-	// Encerrar túneis/sessões ativas antes de remover a conta
-	utils.TerminateUserSessions(username, uid)
-
-	attempts := 0
-	deletionSuccess := false
-
-	// Loop de tentativas
-	for attempts < 3 && !deletionSuccess {
-		// Tenta deletar usuário com força (userdel -f -r)
-		if err := utils.DeleteUser(username); err != nil {
-			utils.TerminateUserSessions(username, uid)
-			attempts++
-			time.Sleep(1 * time.Second)
-			continue
-		}
-
-		// Após userdel o username não resolve mais — matar e verificar pelo UID
-		utils.TerminateUserSessions("", uid)
-
-		hasProcesses, _ := utils.HasUserProcessesByUID(uid)
-		if hasProcesses {
-			utils.TerminateUserSessions("", uid)
-			attempts++
-			time.Sleep(1 * time.Second)
-			continue
-		}
-
-		stillExists, _ := utils.CheckUserExists(username)
-		if !stillExists {
-			deletionSuccess = true
+	// Salvar expiração atual para backup antes de desativar
+	for _, sh := range s.store.Shadow {
+		if sh.Username == username {
+			_ = utils.SaveExpirationBackup(username, sh.ExpireDays)
 			break
 		}
-		attempts++
-		time.Sleep(1 * time.Second)
 	}
 
-	if deletionSuccess {
-		utils.TerminateUserSessions("", uid)
-		utils.RemoveExpirationBackup(username)
-	}
-
-	if deletionSuccess {
-		return models.SSHUserResponse{
-			Username: username,
-			Success:  true,
-			Message:  "User deleted successfully",
-		}
-	}
-
-	return models.SSHUserResponse{
-		Username: username,
-		Success:  false,
-		Message:  "Failed to remove user and kill all processes after multiple attempts.",
-	}
-}
-
-// DisableUser desabilita um usuário SSH
-func (s *SSHService) DisableUser(username string) models.SSHUserResponse {
-	// Verificar se usuário existe
-	userExists, err := utils.CheckUserExists(username)
+	uid, err := s.store.SetUserDisabled(username)
 	if err != nil {
-		errorMessage := fmt.Sprintf("Error checking if user exists: %v", err)
-		utils.WriteLog(errorMessage)
 		return models.SSHUserResponse{
 			Username: username,
 			Success:  false,
-			Message:  errorMessage,
+			Message:  err.Error(),
 		}
 	}
 
-	if !userExists {
+	if err := s.store.Save(); err != nil {
 		return models.SSHUserResponse{
 			Username: username,
 			Success:  false,
-			Message:  "User not found",
+			Message:  fmt.Sprintf("Error saving system files: %v", err),
 		}
 	}
 
-	// Desabilitar usuário (bloqueia e mata processos)
-	if err := utils.DisableUser(username); err != nil {
-		errorMessage := fmt.Sprintf("Error disabling user: %v", err)
-		utils.WriteLog(errorMessage)
-		return models.SSHUserResponse{
-			Username: username,
-			Success:  false,
-			Message:  errorMessage,
-		}
-	}
+	// Matar túneis/sessões ativas
+	utils.TerminateUserSessions(username, uid)
 
 	return models.SSHUserResponse{
 		Username: username,
@@ -447,39 +521,63 @@ func (s *SSHService) DisableUser(username string) models.SSHUserResponse {
 	}
 }
 
-// EnableUser habilita um usuário SSH
-// Implementação igual ao V1 para garantir reativação completa
+// EnableUser habilita um usuário SSH restaurando shell e validade
 func (s *SSHService) EnableUser(username string, days *int) models.SSHUserResponse {
-	// Verificar se usuário existe
-	userExists, err := utils.CheckUserExists(username)
+	if utils.IsReservedUsername(username) {
+		return models.SSHUserResponse{
+			Username: username,
+			Success:  false,
+			Message:  "Cannot enable reserved/system user",
+		}
+	}
+
+	var expireDays string
+	if days != nil && *days > 0 {
+		expireDays = utils.DaysToShadowExpireDays(*days)
+	} else {
+		// Restaurar do backup se existir
+		if origExpire, exists := utils.LoadExpirationBackup(username); exists && origExpire != "" {
+			expireDays = origExpire
+		} else {
+			expireDays = utils.DaysToShadowExpireDays(30) // padrão 30 dias
+		}
+	}
+
+	unlock, err := s.store.Lock()
 	if err != nil {
-		errorMessage := fmt.Sprintf("Error checking if user exists: %v", err)
-		utils.WriteLog(errorMessage)
 		return models.SSHUserResponse{
 			Username: username,
 			Success:  false,
-			Message:  errorMessage,
+			Message:  fmt.Sprintf("Error locking system files: %v", err),
+		}
+	}
+	defer unlock()
+
+	if err := s.store.Load(); err != nil {
+		return models.SSHUserResponse{
+			Username: username,
+			Success:  false,
+			Message:  fmt.Sprintf("Error loading system files: %v", err),
 		}
 	}
 
-	if !userExists {
+	if err := s.store.SetUserEnabled(username, expireDays); err != nil {
 		return models.SSHUserResponse{
 			Username: username,
 			Success:  false,
-			Message:  "User not found",
+			Message:  err.Error(),
 		}
 	}
 
-	// Habilitar usuário (igual ao V1: desbloqueia, restaura shell, atualiza expiração)
-	if err := utils.EnableUser(username, days); err != nil {
-		errorMessage := fmt.Sprintf("Error enabling user: %v", err)
-		utils.WriteLog(errorMessage)
+	if err := s.store.Save(); err != nil {
 		return models.SSHUserResponse{
 			Username: username,
 			Success:  false,
-			Message:  errorMessage,
+			Message:  fmt.Sprintf("Error saving system files: %v", err),
 		}
 	}
+
+	_ = utils.RemoveExpirationBackup(username)
 
 	return models.SSHUserResponse{
 		Username: username,
@@ -488,87 +586,63 @@ func (s *SSHService) EnableUser(username string, days *int) models.SSHUserRespon
 	}
 }
 
-// DeleteAllUsers deleta todos os usuários SSH (exceto usuários reservados)
-// Usa a função ListSSHUsers para obter a lista e depois chama DeleteUsers para cada um
+// DeleteAllUsers deleta todos os usuários SSH não-sistema
 func (s *SSHService) DeleteAllUsers() models.SSHUserCreateResponse {
-	log.Println("Iniciando deleção de todos os usuários SSH.")
+	log.Println("🗑️ Iniciando deleção de todos os usuários SSH não-sistema...")
 
-	// Listar todos os usuários SSH criados
-	usernames, err := utils.ListSSHUsers()
+	unlock, err := s.store.Lock()
 	if err != nil {
-		errorMessage := fmt.Sprintf("Erro ao listar usuários SSH: %v", err)
-		utils.WriteLog(errorMessage)
 		return models.SSHUserCreateResponse{
 			Error:   true,
-			Message: errorMessage,
+			Message: fmt.Sprintf("Erro ao adquirir lock do sistema: %v", err),
 			Details: []models.SSHUserResponse{},
 		}
 	}
+	defer unlock()
 
-	// Filtrar usuários com UID baixo (usuários do sistema) como proteção adicional
-	filteredUsernames := []string{}
-	for _, username := range usernames {
-		// Verificar UID do usuário
-		uid, err := utils.GetUserUID(username)
-		if err != nil {
-			utils.WriteLog(fmt.Sprintf("Erro ao obter UID do usuário %s: %v", username, err))
-			continue
-		}
-
-		// Pular usuários do sistema (UID < 1000)
-		if uid < 1000 {
-			utils.WriteLog(fmt.Sprintf("Pulando usuário do sistema %s (UID: %d)", username, uid))
-			continue
-		}
-
-		filteredUsernames = append(filteredUsernames, username)
-	}
-	usernames = filteredUsernames
-
-	if len(usernames) == 0 {
+	if err := s.store.Load(); err != nil {
 		return models.SSHUserCreateResponse{
-			Error:   false,
-			Message: "Nenhum usuário SSH encontrado para deletar",
+			Error:   true,
+			Message: fmt.Sprintf("Erro ao ler arquivos de usuários: %v", err),
 			Details: []models.SSHUserResponse{},
 		}
 	}
 
-	log.Printf("Encontrados %d usuários SSH para deletar.", len(usernames))
+	totalBefore := len(s.store.Passwd)
 
-	// Usar a função DeleteUsers existente que já tem toda a lógica sofisticada
-	// de desativar usuários, matar processos forçadamente e deletar
-	result := s.DeleteUsers(usernames)
-
-	// Totais para resposta
-	totalBefore := len(usernames)
-	deletedSuccess := 0
-	notDeleted := []models.SSHUserResponse{}
-	for _, d := range result.Details {
-		if d.Success {
-			deletedSuccess++
-		} else {
-			notDeleted = append(notDeleted, d)
+	deletedUIDs, totalDeleted := s.store.DeleteAllNonSystemUsers()
+	if totalDeleted == 0 {
+		return models.SSHUserCreateResponse{
+			Error:        false,
+			Message:      "Nenhum usuário SSH encontrado para deletar",
+			Details:      []models.SSHUserResponse{},
+			TotalBefore:  totalBefore,
+			TotalDeleted: 0,
+			TotalAfter:   totalBefore,
 		}
 	}
-	result.TotalBefore = totalBefore
-	result.TotalDeleted = deletedSuccess
-	if deletedSuccess > totalBefore {
-		deletedSuccess = totalBefore
-	}
-	result.TotalAfter = totalBefore - deletedSuccess
-	result.NotDeleted = notDeleted
 
-	// Limpar arquivo de backup de expiração (todos os usuários foram deletados)
-	// Tentar remover o arquivo de backup se existir
-	backupFile := "./data/ssh_user_expiration_backup.json"
-	if err := os.Remove(backupFile); err != nil && !os.IsNotExist(err) {
-		utils.WriteLog(fmt.Sprintf("Aviso: não foi possível remover arquivo de backup: %v", err))
+	if err := s.store.Save(); err != nil {
+		return models.SSHUserCreateResponse{
+			Error:   true,
+			Message: fmt.Sprintf("Erro ao persistir deleção total: %v", err),
+			Details: []models.SSHUserResponse{},
+		}
 	}
 
-	// Ajustar mensagem para refletir que foram deletados todos os usuários
-	if !result.Error {
-		result.Message = fmt.Sprintf("Todos os usuários SSH foram deletados com sucesso (%d usuários)", len(usernames))
-	}
+	// Encerrar túneis/sessões de todos os UIDs em lote (chunks de 500)
+	utils.TerminateUserSessionsByUIDs(deletedUIDs)
 
-	return result
+	_ = os.Remove("./data/ssh_user_expiration_backup.json")
+
+	log.Printf("✅ Deleção total concluída: %d usuários removidos", totalDeleted)
+
+	return models.SSHUserCreateResponse{
+		Error:        false,
+		Message:      fmt.Sprintf("Todos os usuários SSH foram deletados com sucesso (%d usuários)", totalDeleted),
+		Details:      []models.SSHUserResponse{},
+		TotalBefore:  totalBefore,
+		TotalDeleted: totalDeleted,
+		TotalAfter:   len(s.store.Passwd),
+	}
 }

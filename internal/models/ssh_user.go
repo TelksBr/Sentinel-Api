@@ -10,9 +10,25 @@ import (
 // Singleton validator — thread-safe, reutilizável
 var sshValidate = validator.New()
 
+func init() {
+	// Validação de username compatível com POSIX/Linux: letras, números, _, -, .
+	_ = sshValidate.RegisterValidation("ssh_username", func(fl validator.FieldLevel) bool {
+		username := fl.Field().String()
+		if len(username) < 3 || len(username) > 32 {
+			return false
+		}
+		for _, c := range username {
+			if !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_' || c == '-' || c == '.') {
+				return false
+			}
+		}
+		return true
+	})
+}
+
 // SSHUser representa um usuário SSH
 type SSHUser struct {
-	Username     string `json:"username" validate:"required,min=3,max=32,alphanum"`
+	Username     string `json:"username" validate:"required,min=3,max=32,ssh_username"`
 	Password     string `json:"password" validate:"required,min=4"`
 	Limit        int    `json:"limit" validate:"min=0"`
 	ValidateDays int    `json:"validate" validate:"required,min=1"`
@@ -40,7 +56,7 @@ type SSHUserCreateResponse struct {
 
 // SSHUserTestRequest representa a requisição de teste SSH
 type SSHUserTestRequest struct {
-	Username string `json:"username" validate:"required,min=3,max=32,alphanum"`
+	Username string `json:"username" validate:"required,min=3,max=32,ssh_username"`
 	Password string `json:"password" validate:"required,min=4"`
 	Time     int    `json:"time" validate:"required,min=1"`
 }

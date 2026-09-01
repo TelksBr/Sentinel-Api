@@ -187,16 +187,17 @@ func KillUserProcessesByUID(uid int) error {
 	return nil
 }
 
-// TerminateUserSessions encerra sessões ativas pelo username (se ainda existir) e pelo UID.
+// TerminateUserSessions encerra sessões ativas pelo UID usando varredura direta de /proc em Go puro.
 func TerminateUserSessions(username string, uid int) {
-	if username != "" {
-		if err := sanitizeUsername(username); err == nil {
-			KillUserProcessesForced(username)
-		}
-	}
 	if uid >= 0 {
-		_ = KillUserProcessesByUID(uid)
+		KillActiveProcessesForUIDs([]int{uid})
 	}
+}
+
+// TerminateUserSessionsByUIDs encerra sessões ativas de múltiplos UIDs varrendo /proc e matando via syscall direta.
+// 0 forks de subprocessos, mata APENAS usuários que realmente têm processos rodando.
+func TerminateUserSessionsByUIDs(uids []int) int {
+	return KillActiveProcessesForUIDs(uids)
 }
 
 // HasUserProcesses verifica se existem processos do usuário
@@ -294,6 +295,11 @@ func CalculateDaysUntilExpiration(expirationDateStr string) (int, error) {
 	return days, nil
 }
 
+// SaveExpirationBackup salva a data de expiração original antes de desativar (função pública)
+func SaveExpirationBackup(username, expirationDate string) error {
+	return saveExpirationBackup(username, expirationDate)
+}
+
 // saveExpirationBackup salva a data de expiração original antes de desativar
 func saveExpirationBackup(username, expirationDate string) error {
 	// Garantir que o diretório existe
@@ -327,6 +333,11 @@ func saveExpirationBackup(username, expirationDate string) error {
 	return os.Rename(tmpFile, SSH_EXPIRATION_BACKUP_FILE)
 }
 
+// LoadExpirationBackup carrega a data de expiração original salva (função pública)
+func LoadExpirationBackup(username string) (string, bool) {
+	return loadExpirationBackup(username)
+}
+
 // loadExpirationBackup carrega a data de expiração original salva
 func loadExpirationBackup(username string) (string, bool) {
 	data, err := os.ReadFile(SSH_EXPIRATION_BACKUP_FILE)
@@ -348,8 +359,11 @@ func RemoveExpirationBackup(username string) error {
 	return removeExpirationBackup(username)
 }
 
-// removeExpirationBackup remove o backup após restaurar
-func removeExpirationBackup(username string) error {
+// RemoveExpirationBackups remove o backup de múltiplos usuários em uma única leitura/escrita (função pública)
+func RemoveExpirationBackups(usernames []string) error {
+	if len(usernames) == 0 {
+		return nil
+	}
 	data, err := os.ReadFile(SSH_EXPIRATION_BACKUP_FILE)
 	if err != nil {
 		return nil // Arquivo não existe, nada a remover
@@ -364,14 +378,16 @@ func removeExpirationBackup(username string) error {
 		return nil
 	}
 
-	delete(backup.Users, username)
+	for _, u := range usernames {
+		delete(backup.Users, u)
+	}
 
 	// Se não há mais usuários, remover arquivo
 	if len(backup.Users) == 0 {
 		return os.Remove(SSH_EXPIRATION_BACKUP_FILE)
 	}
 
-	// Reescrever arquivo
+	// Reescrever arquivo de forma atômica
 	data, err = json.MarshalIndent(backup, "", "  ")
 	if err != nil {
 		return err
@@ -383,6 +399,11 @@ func removeExpirationBackup(username string) error {
 	}
 
 	return os.Rename(tmpFile, SSH_EXPIRATION_BACKUP_FILE)
+}
+
+// removeExpirationBackup remove o backup após restaurar
+func removeExpirationBackup(username string) error {
+	return RemoveExpirationBackups([]string{username})
 }
 
 // DisableUser desabilita um usuário (bloqueia a conta e mata processos)
@@ -560,10 +581,10 @@ func GetUserUID(username string) (int, error) {
 }
 
 // ListSSHUsers lista todos os usuários SSH criados (excluindo usuários reservados e do sistema)
-// Retorna uma lista de usernames de usuários com shell /bin/false, /bin/bash, /bin/sh ou /usr/sbin/nologin
+// Retorna uma lista de usernames de usuários com shell /bin/false ou /usr/sbin/nologin
 func ListSSHUsers() ([]string, error) {
-	// Comando para listar usuários SSH: grep -v '^root:' /etc/passwd | grep -E ':/bin/(false|bash|sh)$|:/usr/sbin/nologin$' | cut -d: -f1
-	cmd := exec.Command("bash", "-c", "grep -v '^root:' /etc/passwd | grep -E ':/bin/(false|bash|sh)$|:/usr/sbin/nologin$' | cut -d: -f1 | sort -u")
+	// Comando para listar usuários SSH: grep -v '^root:' /etc/passwd | grep -E ':/bin/false$|:/usr/sbin/nologin$' | cut -d: -f1
+	cmd := exec.Command("bash", "-c", "grep -v '^root:' /etc/passwd | grep -E ':/bin/false$|:/usr/sbin/nologin$' | cut -d: -f1 | sort -u")
 	output, err := cmd.Output()
 	if err != nil {
 		return nil, fmt.Errorf("erro ao listar usuários SSH: %v", err)
