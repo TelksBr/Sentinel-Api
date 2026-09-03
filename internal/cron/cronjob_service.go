@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -19,13 +20,24 @@ const (
 	CRONJOB_FILE = "/root/sentinel/temp/cronjobs.json"
 )
 
+func cronjobFilePath() string {
+	if p := strings.TrimSpace(os.Getenv("SENTINEL_CRONJOBS_FILE")); p != "" {
+		return p
+	}
+	return CRONJOB_FILE
+}
+
+func cronjobDirPath() string {
+	return filepath.Dir(cronjobFilePath())
+}
+
 // cronjobStoreLockPath ficheiro de lock entre processos para cronjobs.json.
 // SENTINEL_CRONJOBS_LOCK_FILE sobrescreve (recomendado com várias instâncias).
 func cronjobStoreLockPath() string {
 	if p := strings.TrimSpace(os.Getenv("SENTINEL_CRONJOBS_LOCK_FILE")); p != "" {
 		return p
 	}
-	return CRONJOB_FILE + ".sentinel.lock"
+	return cronjobFilePath() + ".sentinel.lock"
 }
 
 // CronjobService gerencia os cronjobs da aplicação
@@ -55,7 +67,7 @@ func (cs *CronjobService) lockCronjobStore() (unlock func(), err error) {
 // NewCronjobService cria uma nova instância do serviço de cronjobs
 func NewCronjobService(sshService *services.SSHService, v2rayService *services.V2RayService) *CronjobService {
 	// Criar diretório se não existir
-	os.MkdirAll(CRONJOB_DIR, 0755)
+	_ = os.MkdirAll(cronjobDirPath(), 0755)
 
 	// Criar arquivo de cronjobs se não existir (com lock para várias instâncias no arranque)
 	fl := flock.New(cronjobStoreLockPath())
@@ -67,8 +79,8 @@ func NewCronjobService(sshService *services.SSHService, v2rayService *services.V
 				log.Printf("Erro ao libertar lock após init cronjobs.json: %v", uerr)
 			}
 		}()
-		if _, err := os.Stat(CRONJOB_FILE); os.IsNotExist(err) {
-			if err := os.WriteFile(CRONJOB_FILE, []byte("[]"), 0644); err != nil {
+		if _, err := os.Stat(cronjobFilePath()); os.IsNotExist(err) {
+			if err := os.WriteFile(cronjobFilePath(), []byte("[]"), 0644); err != nil {
 				log.Printf("Erro ao criar cronjobs.json: %v", err)
 			}
 		}
@@ -364,7 +376,7 @@ func (cs *CronjobService) addCronjob(cronjob Cronjob) error {
 
 // loadCronjobs carrega cronjobs do arquivo JSON
 func (cs *CronjobService) loadCronjobs() ([]Cronjob, error) {
-	data, err := os.ReadFile(CRONJOB_FILE)
+	data, err := os.ReadFile(cronjobFilePath())
 	if err != nil {
 		return nil, err
 	}
@@ -384,7 +396,7 @@ func (cs *CronjobService) saveCronjobs(cronjobs []Cronjob) error {
 		return err
 	}
 
-	return os.WriteFile(CRONJOB_FILE, data, 0644)
+	return os.WriteFile(cronjobFilePath(), data, 0644)
 }
 
 // cleanExecutedCronjobs remove cronjobs já executados
