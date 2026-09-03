@@ -182,3 +182,40 @@ func EnsureSystemdServiceLogsDisabled(serviceNames ...string) (int, error) {
 
 	return modifiedCount, nil
 }
+
+// EnsureLogFileAccessible garante que o diretório e o arquivo de log existam e tenham permissões
+// completas de leitura e escrita para todos os usuários (chmod 777 no diretório e chmod 666 no arquivo).
+// Isso evita que serviços executados como usuários não-privilegiados (ex: nobody, xray, v2ray)
+// falhem ao inicializar com erro 'permission denied' (exit code 23).
+func EnsureLogFileAccessible(logFilePath string) error {
+	if strings.TrimSpace(logFilePath) == "" || logFilePath == "none" {
+		return nil
+	}
+
+	logFilePath = filepath.Clean(logFilePath)
+	dir := filepath.Dir(logFilePath)
+
+	// 1. Criar o diretório de logs se não existir e aplicar permissão 0777
+	if err := os.MkdirAll(dir, 0777); err != nil {
+		log.Printf("⚠️ Erro ao criar diretório de log %s: %v", dir, err)
+	}
+	_ = os.Chmod(dir, 0777)
+	_ = ExecuteCommandQuiet("chmod", "777", dir)
+
+	// 2. Criar o arquivo de log se não existir com permissão 0666
+	if _, err := os.Stat(logFilePath); os.IsNotExist(err) {
+		if f, err := os.OpenFile(logFilePath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666); err == nil {
+			_ = f.Close()
+		}
+	}
+
+	// 3. Garantir permissões de leitura/escrita para todos os usuários (0666) no arquivo
+	_ = os.Chmod(logFilePath, 0666)
+	_ = ExecuteCommandQuiet("chmod", "666", logFilePath)
+
+	// 4. Se estiver em ambiente Linux com chown disponível, ajustar ownership para nobody:nogroup
+	_ = ExecuteCommandQuiet("chown", "-R", "nobody:nogroup", dir)
+
+	return nil
+}
+

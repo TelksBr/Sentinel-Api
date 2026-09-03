@@ -151,3 +151,48 @@ ExecStart=/usr/bin/xray
 		t.Errorf("StandardOutput=null não foi persistido no arquivo")
 	}
 }
+
+func TestEnsureLogFileAccessible(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "log_perm_test_*")
+	if err != nil {
+		t.Fatalf("Erro ao criar tempDir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	logPath := filepath.Join(tempDir, "subdir", "access.log")
+
+	// Deve criar o diretório e arquivo com sucesso
+	if err := EnsureLogFileAccessible(logPath); err != nil {
+		t.Fatalf("EnsureLogFileAccessible retornou erro: %v", err)
+	}
+
+	statDir, err := os.Stat(filepath.Dir(logPath))
+	if err != nil {
+		t.Fatalf("Diretório não foi criado: %v", err)
+	}
+	if !statDir.IsDir() {
+		t.Errorf("Esperava diretório criado")
+	}
+
+	statFile, err := os.Stat(logPath)
+	if err != nil {
+		t.Fatalf("Arquivo não foi criado: %v", err)
+	}
+	if statFile.IsDir() {
+		t.Errorf("Esperava arquivo criado, não diretório")
+	}
+
+	// Chamar novamente deve ser idempotente
+	if err := EnsureLogFileAccessible(logPath); err != nil {
+		t.Fatalf("Segunda chamada a EnsureLogFileAccessible falhou: %v", err)
+	}
+
+	// Caminho vazio ou "none" não deve dar erro
+	if err := EnsureLogFileAccessible(""); err != nil {
+		t.Errorf("EnsureLogFileAccessible com string vazia deveria retornar nil")
+	}
+	if err := EnsureLogFileAccessible("none"); err != nil {
+		t.Errorf("EnsureLogFileAccessible com 'none' deveria retornar nil")
+	}
+}
+

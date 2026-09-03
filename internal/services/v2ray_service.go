@@ -526,16 +526,16 @@ func (s *V2RayService) saveConfigGeneric(cfg map[string]interface{}) error {
 	// Converter para string para usar sjson/gjson
 	jsonStr := string(originalBytes)
 
-	// Garantir que a seção log esteja configurada no config se estiver ausente
-	if !gjson.Get(jsonStr, "log.access").Exists() || strings.TrimSpace(gjson.Get(jsonStr, "log.access").String()) == "" || gjson.Get(jsonStr, "log.access").String() == "none" {
-		_ = os.MkdirAll("/var/log/xray", 0755)
-		if f, err := os.OpenFile("/var/log/xray/access.log", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644); err == nil {
-			_ = f.Close()
-		}
+	// Garantir que a seção log esteja configurada no config se estiver ausente e que permissões sejam totais
+	accessVal := gjson.Get(jsonStr, "log.access").String()
+	if !gjson.Get(jsonStr, "log.access").Exists() || strings.TrimSpace(accessVal) == "" || accessVal == "none" {
+		_ = utils.EnsureLogFileAccessible("/var/log/xray/access.log")
 		jsonStr, _ = sjson.Set(jsonStr, "log.access", "/var/log/xray/access.log")
 		if !gjson.Get(jsonStr, "log.loglevel").Exists() {
 			jsonStr, _ = sjson.Set(jsonStr, "log.loglevel", "info")
 		}
+	} else {
+		_ = utils.EnsureLogFileAccessible(accessVal)
 	}
 
 	// Atualizar apenas os arrays de clients usando sjson

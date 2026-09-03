@@ -256,14 +256,8 @@ func (m *MonitorService) autoConfigureV2RayLog(configPath string) {
 	if needUpdate {
 		log.Printf("⚙️ Injetando configuração de log no V2Ray/Xray (%s)...", configPath)
 
-		// Criar pasta de log se não existir
-		_ = os.MkdirAll("/var/log/xray", 0755)
-
 		accessLogPath := "/var/log/xray/access.log"
-		// Criar arquivo se não existir
-		if f, err := os.OpenFile(accessLogPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644); err == nil {
-			_ = f.Close()
-		}
+		_ = utils.EnsureLogFileAccessible(accessLogPath)
 
 		cfg["log"] = map[string]interface{}{
 			"access":      accessLogPath,
@@ -279,6 +273,7 @@ func (m *MonitorService) autoConfigureV2RayLog(configPath string) {
 				if err := os.Rename(tmp, configPath); err == nil {
 					log.Printf("✅ Log de acesso V2Ray/Xray configurado com sucesso em %s", accessLogPath)
 					m.currentLogPath = accessLogPath
+					_ = utils.EnsureLogFileAccessible(accessLogPath)
 					// Recarregar serviço para começar a gravar logs imediatamente
 					_ = utils.ExecuteCommandQuiet("systemctl", "reload", "xray")
 					_ = utils.ExecuteCommandQuiet("systemctl", "reload", "v2ray")
@@ -290,6 +285,7 @@ func (m *MonitorService) autoConfigureV2RayLog(configPath string) {
 	if m.currentLogPath == "" {
 		if logObj, ok := cfg["log"].(map[string]interface{}); ok {
 			if access, ok := logObj["access"].(string); ok && access != "" && access != "none" {
+				_ = utils.EnsureLogFileAccessible(access)
 				if _, err := os.Stat(access); err == nil {
 					m.currentLogPath = access
 				}
@@ -298,6 +294,10 @@ func (m *MonitorService) autoConfigureV2RayLog(configPath string) {
 		if m.currentLogPath == "" {
 			m.findV2RayLogFileSilently()
 		}
+	}
+
+	if m.currentLogPath != "" {
+		_ = utils.EnsureLogFileAccessible(m.currentLogPath)
 	}
 
 	// Garantir que os logs do systemd (journald) estejam suprimidos (StandardOutput=null / StandardError=null)
@@ -642,16 +642,19 @@ func (m *MonitorService) safeTrimLargeLogFile(filePath string, maxBytes int64, k
 	}
 
 	tmpPath := fmt.Sprintf("%s.cleanup.%d.tmp", filePath, os.Getpid())
-	if err := os.WriteFile(tmpPath, []byte(strings.Join(lines, "\n")), 0644); err != nil {
+	if err := os.WriteFile(tmpPath, []byte(strings.Join(lines, "\n")), 0666); err != nil {
 		log.Printf("❌ Erro ao escrever arquivo temporário de limpeza: %v", err)
 		return false
 	}
+	_ = os.Chmod(tmpPath, 0666)
 
 	if err := os.Rename(tmpPath, filePath); err != nil {
 		log.Printf("❌ Erro ao substituir log reduzido: %v", err)
 		_ = os.Remove(tmpPath)
 		return false
 	}
+
+	_ = utils.EnsureLogFileAccessible(filePath)
 
 	log.Printf("✅ Log %s otimizado com sucesso!", filePath)
 	return true
@@ -963,16 +966,19 @@ func (m *MonitorService) performV2RayLogCleanup() {
 
 	// Ficheiro tmp único por PID (evita corrida entre processos no mesmo .tmp)
 	tmpPath := fmt.Sprintf("%s.cleanup.%d.tmp", m.currentLogPath, os.Getpid())
-	if err := os.WriteFile(tmpPath, []byte(strings.Join(newLogContent, "\n")), 0644); err != nil {
+	if err := os.WriteFile(tmpPath, []byte(strings.Join(newLogContent, "\n")), 0666); err != nil {
 		log.Printf("❌ Erro ao escrever tmp de limpeza: %v", err)
 		return
 	}
+	_ = os.Chmod(tmpPath, 0666)
 
 	if err := os.Rename(tmpPath, m.currentLogPath); err != nil {
 		log.Printf("❌ Erro ao renomear arquivo de log após limpeza: %v", err)
 		os.Remove(tmpPath)
 		return
 	}
+
+	_ = utils.EnsureLogFileAccessible(m.currentLogPath)
 
 	log.Printf("✅ Limpeza de logs V2Ray concluída: %d linhas removidas, %d mantidas", removed, kept)
 }
