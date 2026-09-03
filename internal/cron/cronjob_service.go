@@ -107,9 +107,9 @@ func (cs *CronjobService) Stop() {
 
 // AddTestCronjob adiciona um cronjob para usuário de teste
 func (cs *CronjobService) AddTestCronjob(id, cronType string, hoursFromNow int) error {
-	// Validar valor de horas (limitar a um máximo razoável)
-	if hoursFromNow < 0 || hoursFromNow > 8760 { // máximo 1 ano
-		return fmt.Errorf("horas inválidas: %d (deve estar entre 0 e 8760)", hoursFromNow)
+	// Validar valor de horas (limitar ao teto máximo de 72 horas para testes)
+	if hoursFromNow < 1 || hoursFromNow > 72 {
+		return fmt.Errorf("horas inválidas: %d (deve estar entre 1 e 72)", hoursFromNow)
 	}
 
 	execTime := time.Now().Add(time.Duration(hoursFromNow) * time.Hour)

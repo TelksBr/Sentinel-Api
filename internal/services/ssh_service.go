@@ -119,8 +119,8 @@ func (s *SSHService) CreateUsers(users []models.SSHUser) models.SSHUserCreateRes
 		}
 
 		var expireDays string
-		if user.IsTest && user.Time > 0 {
-			expireDays = utils.HoursToShadowExpireDays(user.Time)
+		if user.IsTest {
+			expireDays = utils.DaysToShadowExpireDays(4)
 		} else {
 			expireDays = utils.DaysToShadowExpireDays(user.ValidateDays)
 		}
@@ -174,7 +174,7 @@ func (s *SSHService) CreateTestUser(request models.SSHUserTestRequest, cronServi
 		Username:     request.Username,
 		Password:     request.Password,
 		Limit:        0,
-		ValidateDays: 3, // 3 dias como margem de segurança no shadow
+		ValidateDays: 4, // 4 dias como margem de segurança no shadow
 		IsTest:       true,
 		Time:         request.Time,
 	}

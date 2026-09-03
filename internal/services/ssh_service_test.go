@@ -187,6 +187,31 @@ func TestSSHService_TestUser(t *testing.T) {
 	if len(cronMock.addedJobs) != 1 || cronMock.addedJobs[0] != "teste4horas:ssh:4" {
 		t.Errorf("Cronjob não registrado corretamente: %v", cronMock.addedJobs)
 	}
+
+	// Verificar se a validade no shadow foi definida para 4 dias
+	_ = service.store.Load()
+	expectedExpireDays := utils.DaysToShadowExpireDays(4)
+	found := false
+	for _, s := range service.store.Shadow {
+		if s.Username == "teste4horas" {
+			found = true
+			if s.ExpireDays != expectedExpireDays {
+				t.Errorf("ExpireDays no shadow = %s, esperado %s (4 dias)", s.ExpireDays, expectedExpireDays)
+			}
+			break
+		}
+	}
+	if !found {
+		t.Errorf("Usuário teste4horas não encontrado no shadow")
+	}
+
+	// Verificar que DeleteExpiredUsers não remove o usuário de teste no mesmo dia
+	respDel := service.DeleteExpiredUsers()
+	for _, delUser := range respDel.Details {
+		if delUser.Username == "teste4horas" {
+			t.Errorf("Usuário de teste não deveria ter sido removido por DeleteExpiredUsers hoje")
+		}
+	}
 }
 
 func TestSSHService_DeleteExpiredUsers(t *testing.T) {

@@ -58,7 +58,7 @@ type SSHUserCreateResponse struct {
 type SSHUserTestRequest struct {
 	Username string `json:"username" validate:"required,min=3,max=32,ssh_username"`
 	Password string `json:"password" validate:"required,min=4"`
-	Time     int    `json:"time" validate:"required,min=1"`
+	Time     int    `json:"time" validate:"required,min=1,max=72"`
 }
 
 // SSHUserUpdateRequest representa a requisição de atualização SSH
