@@ -3,9 +3,11 @@ package main
 import (
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"runtime"
+	"strings"
 
 	"api-v2/internal/cron"
 	"api-v2/internal/middleware"
@@ -16,6 +18,21 @@ import (
 var version = "dev"
 
 func main() {
+	// Flags de linha de comando
+	port := flag.Int("port", 8080, "Porta para o servidor HTTP")
+	tlsCert := flag.String("tls-cert", "", "Caminho para o certificado TLS (opcional)")
+	tlsKey := flag.String("tls-key", "", "Caminho para a chave privada TLS (opcional)")
+	silent := flag.Bool("silent", false, "Desativa logs informativos no console")
+	logLevel := flag.String("log-level", "info", "Nível de log (debug, info, warn, error, silent)")
+	flag.Parse()
+
+	// Configuração de logs / modo silencioso
+	isSilent := *silent || strings.ToLower(*logLevel) == "silent" || os.Getenv("SENTINEL_LOG_SILENT") == "true"
+	if isSilent {
+		os.Setenv("SENTINEL_LOG_SILENT", "true")
+		log.SetOutput(io.Discard)
+	}
+
 	log.Printf("🚀 Sentinel API versão %s iniciando...", version)
 
 	// Otimização: Limitar GOMAXPROCS para reduzir consumo de CPU
@@ -30,12 +47,6 @@ func main() {
 	}
 	runtime.GOMAXPROCS(maxProcs)
 	log.Printf("⚙️ GOMAXPROCS configurado: %d (de %d cores disponíveis)", maxProcs, numCPU)
-
-	// Flags de linha de comando
-	port := flag.Int("port", 8080, "Porta para o servidor HTTP")
-	tlsCert := flag.String("tls-cert", "", "Caminho para o certificado TLS (opcional)")
-	tlsKey := flag.String("tls-key", "", "Caminho para a chave privada TLS (opcional)")
-	flag.Parse()
 
 	// Retrocompatibilidade: se passou porta como argumento posicional (sem flag)
 	if flag.NArg() > 0 && *port == 8080 {

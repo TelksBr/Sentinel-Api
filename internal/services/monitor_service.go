@@ -3,6 +3,7 @@ package services
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"os/exec"
@@ -97,6 +98,9 @@ func (m *MonitorService) Start() {
 	} else {
 		log.Println("ℹ️ V2Ray/Xray não detectado no servidor (monitoramento de V2Ray pausado aguardando instalação).")
 	}
+
+	// Verificar e otimizar logs excessivamente grandes no arranque para evitar OOM e poupar disco
+	m.checkAndOptimizeLogFiles()
 
 	// Iniciar goroutines de monitoramento
 	go m.monitorSSHUsers()
@@ -555,6 +559,130 @@ func (m *MonitorService) getSSHUsersListFallback() []models.SSHUserOnline {
 	return users
 }
 
+// ReadLogTail lê de forma segura apenas os últimos maxBytes de um arquivo de log,
+// evitando carregar arquivos gigantes (como logs de múltiplos GB) na memória RAM.
+func ReadLogTail(filePath string, maxBytes int64) ([]string, error) {
+	file, err := os.Open(filePath)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+
+	stat, err := file.Stat()
+	if err != nil {
+		return nil, err
+	}
+
+	fileSize := stat.Size()
+	if fileSize == 0 {
+		return []string{}, nil
+	}
+
+	readSize := fileSize
+	offset := int64(0)
+	if fileSize > maxBytes {
+		readSize = maxBytes
+		offset = fileSize - maxBytes
+	}
+
+	buf := make([]byte, readSize)
+	n, err := file.ReadAt(buf, offset)
+	if err != nil && err != io.EOF {
+		return nil, err
+	}
+	buf = buf[:n]
+
+	// Se truncamos a partir do meio do arquivo, a primeira linha pode estar incompleta.
+	// Avançar até a primeira quebra de linha '\n'.
+	str := string(buf)
+	if offset > 0 {
+		if idx := strings.IndexByte(str, '\n'); idx != -1 {
+			str = str[idx+1:]
+		}
+	}
+
+	lines := strings.Split(str, "\n")
+	return lines, nil
+}
+
+// safeTrimLargeLogFile reduz de forma atômica um arquivo de log gigante para os últimos keepBytes
+func (m *MonitorService) safeTrimLargeLogFile(filePath string, maxBytes int64, keepBytes int64) bool {
+	stat, err := os.Stat(filePath)
+	if err != nil || stat.Size() <= maxBytes {
+		return false
+	}
+
+	lockPath := m.v2rayCleanupLockFile
+	if lockPath == "" {
+		lockPath = filePath + ".cleanup.lock"
+	}
+	fl := flock.New(lockPath)
+	if err := fl.Lock(); err != nil {
+		log.Printf("⚠️ Erro ao obter lock para otimização de log (%s): %v", filePath, err)
+		return false
+	}
+	defer func() {
+		_ = fl.Unlock()
+	}()
+
+	// Re-checar tamanho após lock para garantir que outra rotina não o tenha feito
+	stat, err = os.Stat(filePath)
+	if err != nil || stat.Size() <= maxBytes {
+		return false
+	}
+
+	sizeMB := stat.Size() / (1024 * 1024)
+	keepMB := keepBytes / (1024 * 1024)
+	log.Printf("⚠️ Arquivo de log %s muito grande (%d MB). Reduzindo para os últimos %d MB para economizar memória e disco...",
+		filePath, sizeMB, keepMB)
+
+	lines, err := ReadLogTail(filePath, keepBytes)
+	if err != nil || len(lines) == 0 {
+		return false
+	}
+
+	tmpPath := fmt.Sprintf("%s.cleanup.%d.tmp", filePath, os.Getpid())
+	if err := os.WriteFile(tmpPath, []byte(strings.Join(lines, "\n")), 0644); err != nil {
+		log.Printf("❌ Erro ao escrever arquivo temporário de limpeza: %v", err)
+		return false
+	}
+
+	if err := os.Rename(tmpPath, filePath); err != nil {
+		log.Printf("❌ Erro ao substituir log reduzido: %v", err)
+		_ = os.Remove(tmpPath)
+		return false
+	}
+
+	log.Printf("✅ Log %s otimizado com sucesso!", filePath)
+	return true
+}
+
+// checkAndOptimizeLogFiles verifica se algum log existente é excessivamente grande e otimiza no arranque
+func (m *MonitorService) checkAndOptimizeLogFiles() {
+	pathsToCheck := append([]string{}, m.v2rayLogPaths...)
+	if m.currentLogPath != "" {
+		pathsToCheck = append(pathsToCheck, m.currentLogPath)
+	}
+
+	maxSize := int64(20 * 1024 * 1024) // 20 MB limite padrão para disparar auto-trim
+	keepSize := int64(2 * 1024 * 1024) // 2 MB para manter
+
+	if envMB := os.Getenv("SENTINEL_V2RAY_LOG_MAX_MB"); envMB != "" {
+		if mb, err := strconv.ParseInt(envMB, 10, 64); err == nil && mb > 0 {
+			maxSize = mb * 1024 * 1024
+		}
+	}
+
+	for _, path := range pathsToCheck {
+		if path == "" {
+			continue
+		}
+		if _, err := os.Stat(path); err == nil {
+			m.safeTrimLargeLogFile(path, maxSize, keepSize)
+		}
+	}
+}
+
 // updateV2RayUsers atualiza o número de usuários V2Ray online
 func (m *MonitorService) updateV2RayUsers() {
 	m.mutex.RLock()
@@ -574,20 +702,27 @@ func (m *MonitorService) updateV2RayUsers() {
 		m.findV2RayLogFileSilently()
 	}
 
-	var allContent strings.Builder
+	maxTailBytes := int64(2 * 1024 * 1024) // 2 MB é suficiente para milhares de conexões recentes
+	if envTail := os.Getenv("SENTINEL_V2RAY_LOG_MAX_TAIL_MB"); envTail != "" {
+		if mb, err := strconv.ParseInt(envTail, 10, 64); err == nil && mb > 0 {
+			maxTailBytes = mb * 1024 * 1024
+		}
+	}
+
+	var lines []string
 	var foundLogPath string
 
 	if m.currentLogPath != "" {
-		if content, err := os.ReadFile(m.currentLogPath); err == nil {
-			allContent.WriteString(string(content))
+		if l, err := ReadLogTail(m.currentLogPath, maxTailBytes); err == nil && len(l) > 0 {
+			lines = l
 			foundLogPath = m.currentLogPath
 		}
 	}
 
-	if allContent.Len() == 0 {
+	if len(lines) == 0 {
 		for _, logPath := range m.v2rayLogPaths {
-			if content, err := os.ReadFile(logPath); err == nil {
-				allContent.WriteString(string(content))
+			if l, err := ReadLogTail(logPath, maxTailBytes); err == nil && len(l) > 0 {
+				lines = l
 				foundLogPath = logPath
 				m.currentLogPath = logPath
 				break
@@ -595,7 +730,7 @@ func (m *MonitorService) updateV2RayUsers() {
 		}
 	}
 
-	if allContent.Len() == 0 {
+	if len(lines) == 0 {
 		m.mutex.Lock()
 		m.v2rayUsers = 0
 		m.v2rayUsersList = []models.V2RayUserOnline{}
@@ -603,7 +738,6 @@ func (m *MonitorService) updateV2RayUsers() {
 		return
 	}
 
-	lines := strings.Split(allContent.String(), "\n")
 	currentTime := time.Now()
 	interval := 5 * time.Minute
 
@@ -766,12 +900,18 @@ func (m *MonitorService) cleanV2RayLogs() {
 	}
 }
 
-// performV2RayLogCleanup executa a limpeza de logs V2Ray
+// performV2RayLogCleanup executa a limpeza de logs V2Ray de forma segura sem risco de OOM
 func (m *MonitorService) performV2RayLogCleanup() {
 	if m.currentLogPath == "" {
 		return
 	}
 
+	// 1. Se o arquivo estiver muito grande (> 20 MB), faz trim direto para os últimos 2 MB
+	if m.safeTrimLargeLogFile(m.currentLogPath, 20*1024*1024, 2*1024*1024) {
+		return
+	}
+
+	// 2. Se o arquivo estiver em tamanho seguro (<= 20 MB), faz a limpeza por timestamp
 	lockPath := m.v2rayCleanupLockFile
 	if lockPath == "" {
 		lockPath = m.currentLogPath + ".cleanup.lock"
@@ -790,13 +930,12 @@ func (m *MonitorService) performV2RayLogCleanup() {
 	log.Println("🧹 Iniciando limpeza de logs V2Ray antigos...")
 
 	threshold := time.Now().Add(-12 * time.Hour)
-	content, err := os.ReadFile(m.currentLogPath)
+	lines, err := ReadLogTail(m.currentLogPath, 20*1024*1024)
 	if err != nil {
 		log.Printf("❌ Erro ao ler arquivo de log V2Ray para limpeza: %v", err)
 		return
 	}
 
-	lines := strings.Split(string(content), "\n")
 	estimatedKeep := int(float64(len(lines)) * 0.8)
 	newLogContent := make([]string, 0, estimatedKeep)
 	var removed, kept int

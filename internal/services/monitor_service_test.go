@@ -149,3 +149,99 @@ func TestMonitorService_GetSystemResourcesAccountsCount(t *testing.T) {
 	}
 }
 
+func TestReadLogTail(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "v2ray_tail_test_*")
+	if err != nil {
+		t.Fatalf("Erro ao criar tempDir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	filePath := filepath.Join(tempDir, "access.log")
+
+	// 1. Arquivo não existente
+	_, err = ReadLogTail(filepath.Join(tempDir, "nonexistent.log"), 1024)
+	if err == nil {
+		t.Errorf("ReadLogTail deveria retornar erro para arquivo inexistente")
+	}
+
+	// 2. Arquivo vazio
+	if err := os.WriteFile(filePath, []byte(""), 0644); err != nil {
+		t.Fatalf("Erro ao criar arquivo vazio: %v", err)
+	}
+	lines, err := ReadLogTail(filePath, 1024)
+	if err != nil {
+		t.Fatalf("Erro ao ler arquivo vazio: %v", err)
+	}
+	if len(lines) != 0 {
+		t.Errorf("Esperava 0 linhas para arquivo vazio, obteve %d", len(lines))
+	}
+
+	// 3. Arquivo com 1000 linhas
+	var content string
+	for i := 1; i <= 1000; i++ {
+		content += "2026/09/02 23:00:00 [Info] connection accepted email: user" + string(rune('0'+i%10)) + "@test.com\n"
+	}
+	if err := os.WriteFile(filePath, []byte(content), 0644); err != nil {
+		t.Fatalf("Erro ao escrever log de teste: %v", err)
+	}
+
+	// Ler tail com limite pequeno (ex: 500 bytes)
+	linesTail, err := ReadLogTail(filePath, 500)
+	if err != nil {
+		t.Fatalf("Erro ao ler tail: %v", err)
+	}
+	if len(linesTail) == 0 {
+		t.Fatalf("Esperava linhas lidas do tail, obteve 0")
+	}
+	// Última linha deve ser recente
+	lastLine := linesTail[len(linesTail)-1]
+	if lastLine == "" && len(linesTail) > 1 {
+		lastLine = linesTail[len(linesTail)-2]
+	}
+	if !filepath.IsAbs(filePath) && len(lastLine) == 0 {
+		t.Errorf("Última linha lida do tail está vazia")
+	}
+}
+
+func TestSafeTrimLargeLogFile(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "v2ray_trim_test_*")
+	if err != nil {
+		t.Fatalf("Erro ao criar tempDir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	filePath := filepath.Join(tempDir, "access.log")
+
+	// Criar arquivo com ~100 KB
+	lineContent := "2026/09/02 23:30:00 [Info] connection accepted email: user@test.com\n"
+	var fullContent string
+	for i := 0; i < 1500; i++ {
+		fullContent += lineContent
+	}
+	if err := os.WriteFile(filePath, []byte(fullContent), 0644); err != nil {
+		t.Fatalf("Erro ao escrever arquivo grande: %v", err)
+	}
+
+	monitor := NewMonitorService("")
+
+	// Não deve reduzir se limite for maior que o arquivo
+	if monitor.safeTrimLargeLogFile(filePath, 500*1024, 10*1024) {
+		t.Errorf("safeTrimLargeLogFile não deveria reduzir arquivo menor que o limite")
+	}
+
+	// Deve reduzir quando limite for menor que o arquivo (ex: > 50KB -> reduzir para 10KB)
+	trimmed := monitor.safeTrimLargeLogFile(filePath, 50*1024, 10*1024)
+	if !trimmed {
+		t.Fatalf("safeTrimLargeLogFile deveria ter reduzido o arquivo")
+	}
+
+	stat, err := os.Stat(filePath)
+	if err != nil {
+		t.Fatalf("Erro ao obter stat do arquivo reduzido: %v", err)
+	}
+
+	if stat.Size() > 20*1024 {
+		t.Errorf("Arquivo após trim deveria ter ~10 KB, tem %d bytes", stat.Size())
+	}
+}
+

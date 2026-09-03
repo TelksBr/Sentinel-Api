@@ -1,6 +1,7 @@
 package routes
 
 import (
+	"os"
 	"time"
 
 	"api-v2/internal/cron"
@@ -16,7 +17,9 @@ func SetupRoutes(sshService *services.SSHService, v2rayService *services.V2RaySe
 	// Configurar Gin
 	gin.SetMode(gin.ReleaseMode)
 	r := gin.New()
-	r.Use(gin.Logger())
+	if os.Getenv("SENTINEL_LOG_SILENT") != "true" {
+		r.Use(gin.Logger())
+	}
 	r.Use(gin.Recovery())
 
 	// Rate limiter global: 60 requests/min por IP
