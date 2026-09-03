@@ -163,6 +163,12 @@ func (h *SSHHandlers) DeleteUsers(c *gin.Context) {
 	}
 
 	result := h.sshService.DeleteUsers(usernames)
+
+	// Remover eventuais cronjobs de usuários de teste deletados
+	if len(usernames) > 0 {
+		_, _ = h.cronService.RemovePendingSSHTestCronjobs(usernames)
+	}
+
 	status := http.StatusOK
 	if result.Error {
 		status = http.StatusBadRequest
@@ -243,6 +249,10 @@ func (h *SSHHandlers) EnableUser(c *gin.Context) {
 // DeleteAllUsers deleta todos os usuários SSH
 func (h *SSHHandlers) DeleteAllUsers(c *gin.Context) {
 	result := h.sshService.DeleteAllUsers()
+
+	// Remover todos os cronjobs de usuários de teste SSH pendentes
+	_, _ = h.cronService.RemoveAllPendingSSHTestCronjobs()
+
 	status := http.StatusOK
 	if result.Error {
 		status = http.StatusBadRequest

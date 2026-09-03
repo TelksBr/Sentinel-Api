@@ -91,7 +91,7 @@ func main() {
 	fmt.Printf("🚀 Iniciando Sentinel API %s na porta %d...\n", version, *port)
 	fmt.Printf("🔑 API Key obtida da variável de ambiente API_SENTINEL_KEY\n")
 	fmt.Printf("📁 Detectando configurações V2Ray/Xray...\n")
-	fmt.Printf("⏰ Cronjobs iniciados (usuários teste: 5min, V2Ray expirados: 1h)\n")
+	fmt.Printf("⏰ Cronjobs iniciados (usuários teste SSH e V2Ray expirados: 5min)\n")
 
 	if *tlsCert != "" && *tlsKey != "" {
 		fmt.Printf("🔒 TLS habilitado com certificado: %s\n", *tlsCert)

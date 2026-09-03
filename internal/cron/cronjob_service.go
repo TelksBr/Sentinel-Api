@@ -83,20 +83,24 @@ func NewCronjobService(sshService *services.SSHService, v2rayService *services.V
 
 // Start inicia o serviço de cronjobs
 func (cs *CronjobService) Start() error {
-	// Cronjob 1: Usuários de teste (a cada 5 minutos)
+	// Execução e limpeza imediata no arranque para eliminar lixo pendente do boot anterior
+	go cs.executeTestUserCronjobs()
+	go cs.executeExpiredV2RayUsers()
+
+	// Cronjob 1: Usuários de teste SSH (a cada 5 minutos)
 	_, err := cs.cron.AddFunc("*/5 * * * *", cs.executeTestUserCronjobs)
 	if err != nil {
 		return fmt.Errorf("erro ao adicionar cronjob de usuários teste: %v", err)
 	}
 
-	// Cronjob 2: Usuários V2Ray expirados (a cada 1 hora)
-	_, err = cs.cron.AddFunc("0 */1 * * *", cs.executeExpiredV2RayUsers)
+	// Cronjob 2: Usuários V2Ray expirados (a cada 5 minutos para precisão total em testes)
+	_, err = cs.cron.AddFunc("*/5 * * * *", cs.executeExpiredV2RayUsers)
 	if err != nil {
 		return fmt.Errorf("erro ao adicionar cronjob de usuários V2Ray expirados: %v", err)
 	}
 
 	cs.cron.Start()
-	log.Println("Serviço de cronjobs iniciado.")
+	log.Println("Serviço de cronjobs iniciado (SSH e V2Ray: a cada 5 minutos).")
 	return nil
 }
 
@@ -180,6 +184,36 @@ func (cs *CronjobService) RemovePendingSSHTestCronjobs(usernames []string) (int,
 	return removed, cs.saveCronjobs(filtered)
 }
 
+// RemoveAllPendingSSHTestCronjobs remove todas as tarefas pendentes de deleção de usuários SSH de teste.
+func (cs *CronjobService) RemoveAllPendingSSHTestCronjobs() (int, error) {
+	unlock, err := cs.lockCronjobStore()
+	if err != nil {
+		return 0, err
+	}
+	defer unlock()
+
+	cronjobs, err := cs.loadCronjobs()
+	if err != nil {
+		return 0, err
+	}
+
+	filtered := make([]Cronjob, 0, len(cronjobs))
+	removed := 0
+	for _, job := range cronjobs {
+		if job.Type == "ssh" && !job.Executed {
+			removed++
+			continue
+		}
+		filtered = append(filtered, job)
+	}
+
+	if removed == 0 {
+		return 0, nil
+	}
+
+	return removed, cs.saveCronjobs(filtered)
+}
+
 // executeTestUserCronjobs executa cronjobs de usuários de teste (thread-safe)
 func (cs *CronjobService) executeTestUserCronjobs() {
 	unlock, err := cs.lockCronjobStore()
@@ -189,75 +223,76 @@ func (cs *CronjobService) executeTestUserCronjobs() {
 	}
 	defer unlock()
 
-	log.Printf("Executando cronjobs de usuários teste...")
-
 	cronjobs, err := cs.loadCronjobs()
 	if err != nil {
 		log.Printf("Erro ao carregar cronjobs: %v", err)
 		return
 	}
 
+	if len(cronjobs) == 0 {
+		return
+	}
+
 	now := time.Now()
-	executed := false
-	validCronjobs := []Cronjob{}
-	invalidCount := 0
+	activeCronjobs := make([]Cronjob, 0, len(cronjobs))
+	var changed bool
 
 	for i := range cronjobs {
-		job := &cronjobs[i]
+		job := cronjobs[i]
 		if job.Executed {
-			validCronjobs = append(validCronjobs, *job)
+			// Não reter cronjobs já executados
+			changed = true
 			continue
 		}
 
 		// Validar e parsear tempo de execução
 		execTime, err := time.Parse(time.RFC3339, job.ExecTime)
 		if err != nil {
-			log.Printf("❌ Cronjob inválido removido - ID: %s, Tipo: %s, ExecTime: %s, Erro: %v",
-				job.ID, job.Type, job.ExecTime, err)
-			invalidCount++
-			continue // Pular este cronjob inválido
-		}
-
-		// Validar que o tempo está em um range razoável (não muito no passado nem muito no futuro)
-		minTime := time.Now().AddDate(-1, 0, 0) // 1 ano atrás
-		maxTime := time.Now().AddDate(1, 0, 0)  // 1 ano à frente
-		if execTime.Before(minTime) || execTime.After(maxTime) {
-			log.Printf("❌ Cronjob com data fora do range removido - ID: %s, Tipo: %s, ExecTime: %s",
-				job.ID, job.Type, execTime.Format(time.RFC3339))
-			invalidCount++
+			log.Printf("❌ Cronjob com formato de data inválido removido - ID: %s, Tipo: %s, ExecTime: %s",
+				job.ID, job.Type, job.ExecTime)
+			changed = true
 			continue
 		}
 
-		validCronjobs = append(validCronjobs, *job)
+		// Validar range razoável
+		minTime := time.Now().AddDate(-1, 0, 0)
+		maxTime := time.Now().AddDate(1, 0, 0)
+		if execTime.Before(minTime) || execTime.After(maxTime) {
+			log.Printf("❌ Cronjob com data fora do range removido - ID: %s, Tipo: %s, ExecTime: %s",
+				job.ID, job.Type, execTime.Format(time.RFC3339))
+			changed = true
+			continue
+		}
 
+		// Se a data de execução for no passado ou agora
 		if execTime.Before(now) || execTime.Equal(now) {
-			if err := cs.executeCronjob(job); err != nil {
-				log.Printf("Erro ao executar cronjob %s: %v", job.ID, err)
-			} else {
-				job.Executed = true
-				executed = true
-				// Atualizar na lista válida
-				for j := range validCronjobs {
-					if validCronjobs[j].ID == job.ID {
-						validCronjobs[j].Executed = true
-						break
-					}
+			if err := cs.executeCronjob(&job); err != nil {
+				log.Printf("⚠️ Erro ao executar cronjob %s: %v", job.ID, err)
+				// Se a data de execução estiver há mais de 24 horas no passado, purgar como lixo antigo
+				if execTime.Before(now.Add(-24 * time.Hour)) {
+					log.Printf("🧹 Purgando cronjob expirado/abandonado (>24h): %s (%s)", job.ID, job.Type)
+					changed = true
+					continue
 				}
+				// Manter para tentar novamente no próximo ciclo se for recente (<24h)
+				activeCronjobs = append(activeCronjobs, job)
+			} else {
+				// Executado com sucesso ou usuário já inexistente.
+				// Não adiciona em activeCronjobs -> removido imediatamente do arquivo!
+				changed = true
+				log.Printf("✅ Cronjob de teste finalizado e removido: %s (%s)", job.ID, job.Type)
 			}
+		} else {
+			// Job futuro ainda aguardando data de execução
+			activeCronjobs = append(activeCronjobs, job)
 		}
 	}
 
-	// Se encontrou entradas inválidas, salvar arquivo limpo
-	if invalidCount > 0 {
-		log.Printf("🧹 Removendo %d cronjob(s) inválido(s) do arquivo...", invalidCount)
-		if err := cs.saveCronjobs(validCronjobs); err != nil {
-			log.Printf("Erro ao salvar cronjobs após limpeza de inválidos: %v", err)
+	// Se houve qualquer alteração (jobs executados, limpos ou inválidos), salvar lista ativa limpa
+	if changed || len(activeCronjobs) != len(cronjobs) {
+		if err := cs.saveCronjobs(activeCronjobs); err != nil {
+			log.Printf("Erro ao salvar cronjobs atualizados: %v", err)
 		}
-	}
-
-	if executed {
-		cs.saveCronjobs(validCronjobs)
-		cs.cleanExecutedCronjobs()
 	}
 }
 
@@ -279,9 +314,21 @@ func (cs *CronjobService) executeCronjob(job *Cronjob) error {
 		// Deletar usuário SSH
 		result := cs.sshService.DeleteUsers([]string{job.ID})
 		if result.Error {
-			return fmt.Errorf("falha ao deletar usuário SSH %s: %s", job.ID, result.Message)
+			// Se o usuário já não existia ou já havia sido deletado antes, considerar sucesso (tarefa concluída)
+			allAlreadyDeletedOrNotFound := true
+			for _, d := range result.Details {
+				if d.Username == job.ID {
+					if d.Success || strings.Contains(d.Message, "does not exist") || strings.Contains(d.Message, "already deleted") {
+						continue
+					}
+				}
+				allAlreadyDeletedOrNotFound = false
+			}
+			if !allAlreadyDeletedOrNotFound {
+				return fmt.Errorf("falha ao deletar usuário SSH %s: %s", job.ID, result.Message)
+			}
 		}
-		log.Printf("Usuário SSH removido: %s", job.ID)
+		log.Printf("Usuário SSH teste concluído/removido: %s", job.ID)
 
 	case "v2ray":
 		// Deletar usuário V2Ray
@@ -289,7 +336,7 @@ func (cs *CronjobService) executeCronjob(job *Cronjob) error {
 		if result.Error {
 			return fmt.Errorf("falha ao deletar usuário V2Ray %s: %s", job.ID, result.Message)
 		}
-		log.Printf("Usuário V2Ray removido: %s", job.ID)
+		log.Printf("Usuário V2Ray teste concluído/removido: %s", job.ID)
 
 	default:
 		return fmt.Errorf("tipo de cronjob desconhecido: %s", job.Type)
@@ -342,7 +389,6 @@ func (cs *CronjobService) saveCronjobs(cronjobs []Cronjob) error {
 
 // cleanExecutedCronjobs remove cronjobs já executados
 func (cs *CronjobService) cleanExecutedCronjobs() {
-	// NOTA: fileMutex já deve estar adquirido pelo chamador (executeTestUserCronjobs)
 	cronjobs, err := cs.loadCronjobs()
 	if err != nil {
 		log.Printf("Erro ao carregar cronjobs para limpeza: %v", err)
@@ -362,3 +408,4 @@ func (cs *CronjobService) cleanExecutedCronjobs() {
 		log.Printf("Erro ao salvar cronjobs após limpeza: %v", err)
 	}
 }
+

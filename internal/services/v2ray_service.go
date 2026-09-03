@@ -3,6 +3,7 @@ package services
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -394,7 +395,13 @@ func (s *V2RayService) RemoveExpiredUsers() error {
 	}
 
 	// Filtrar clientes expirados preservando estrutura
-	s.removeExpiredClientsFromAllInbounds(cfg)
+	removedCount := s.removeExpiredClientsFromAllInbounds(cfg)
+	if removedCount == 0 {
+		// Nenhum cliente expirado: evita I/O e reinício desnecessário
+		return nil
+	}
+
+	log.Printf("🧹 Removendo %d cliente(s) V2Ray/Xray expirado(s)...", removedCount)
 
 	// Salvar configuração com backup
 	if err := s.saveConfigGeneric(cfg); err != nil {
@@ -407,11 +414,9 @@ func (s *V2RayService) RemoveExpiredUsers() error {
 	// Recarregar/Reiniciar serviço Xray/V2Ray (tenta reload primeiro)
 	if err := s.restartOrReloadXray(); err != nil {
 		utils.WriteLog(fmt.Sprintf("Erro ao recarregar/reiniciar serviço: %v", err))
-		// Não falhar a operação por causa do restart
 	}
 
-	// Log opcional removido: lista de usuários removidos não é mais acumulada aqui
-
+	log.Printf("✅ %d cliente(s) V2Ray/Xray expirado(s) removido(s) com sucesso.", removedCount)
 	return nil
 }
 
@@ -726,13 +731,14 @@ func (s *V2RayService) updateClientExpirationInAllInbounds(cfg map[string]interf
 	return found
 }
 
-// removeExpiredClientsFromAllInbounds remove clientes expirados
-func (s *V2RayService) removeExpiredClientsFromAllInbounds(cfg map[string]interface{}) {
+// removeExpiredClientsFromAllInbounds remove clientes expirados e retorna a quantidade removida
+func (s *V2RayService) removeExpiredClientsFromAllInbounds(cfg map[string]interface{}) int {
 	inbounds, ok := cfg["inbounds"].([]interface{})
 	if !ok {
-		return
+		return 0
 	}
 	now := time.Now()
+	removedCount := 0
 	for i := range inbounds {
 		inbound, ok := inbounds[i].(map[string]interface{})
 		if !ok {
@@ -751,6 +757,7 @@ func (s *V2RayService) removeExpiredClientsFromAllInbounds(cfg map[string]interf
 					if expTime, err := time.Parse(time.RFC3339, expStr); err == nil {
 						if !expTime.After(now.Truncate(time.Minute)) {
 							keep = false
+							removedCount++
 						}
 					}
 				}
@@ -764,6 +771,7 @@ func (s *V2RayService) removeExpiredClientsFromAllInbounds(cfg map[string]interf
 		inbounds[i] = inbound
 	}
 	cfg["inbounds"] = inbounds
+	return removedCount
 }
 
 // getV2RayServiceName detecta o nome do serviço (xray ou v2ray) com cache
