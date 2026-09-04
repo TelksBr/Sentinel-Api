@@ -1,6 +1,7 @@
 package utils
 
 import (
+	"bufio"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -606,4 +607,51 @@ func ListSSHUsers() ([]string, error) {
 	}
 
 	return users, nil
+}
+
+// GetUsersWithBinFalseShell lê o arquivo passwd especificado (ou /etc/passwd por padrão)
+// e retorna um map com os usernames que possuem estritamente o shell /bin/false (ou /usr/bin/false),
+// excluindo root, usuários reservados e usuários do sistema (UID < 1000).
+func GetUsersWithBinFalseShell(passwdPath ...string) (map[string]bool, error) {
+	path := "/etc/passwd"
+	if len(passwdPath) > 0 && passwdPath[0] != "" {
+		path = passwdPath[0]
+	}
+
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+
+	users := make(map[string]bool)
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+
+		parts := strings.Split(line, ":")
+		if len(parts) < 7 {
+			continue
+		}
+
+		username := strings.TrimSpace(parts[0])
+		uid, err := strconv.Atoi(strings.TrimSpace(parts[2]))
+		if err != nil {
+			continue
+		}
+		shell := strings.TrimSpace(parts[6])
+
+		// Exibir APENAS usuários com /bin/false, UID >= 1000, não reservados e diferente de root
+		if (shell == "/bin/false" || shell == "/usr/bin/false") &&
+			uid >= 1000 &&
+			username != "root" &&
+			!IsReservedUsername(username) {
+			users[username] = true
+		}
+	}
+
+	return users, scanner.Err()
 }

@@ -245,3 +245,162 @@ func TestSafeTrimLargeLogFile(t *testing.T) {
 	}
 }
 
+func TestExtractSSHUsername(t *testing.T) {
+	tests := []struct {
+		name     string
+		line     string
+		expected string
+	}{
+		{"sshd priv-sep", "root 1234 0.0 0.1 1234 567 ? Ss 12:00 0:00 sshd: user1 [priv]", "user1"},
+		{"sshd net session", "user1 1235 0.0 0.1 1234 567 ? S 12:00 0:00 sshd: user1 [net]", "user1"},
+		{"sshd pts session", "user2 1236 0.0 0.1 1234 567 ? S 12:00 0:00 sshd: user2@pts/0", "user2"},
+		{"sshd notty session", "vpn_client 1237 0.0 0.1 1234 567 ? S 12:00 0:00 sshd: vpn_client@notty", "vpn_client"},
+		{"sshd without suffix", "user3 1238 0.0 0.1 1234 567 ? S 12:00 0:00 sshd: user3", "user3"},
+		{"daemon listener", "root 1200 0.0 0.1 1234 567 ? Ss 12:00 0:00 /usr/sbin/sshd -D [listener]", ""},
+		{"sshd binary path", "root 1200 0.0 0.1 1234 567 ? Ss 12:00 0:00 sshd: /usr/sbin/sshd -D", ""},
+		{"sshd accepted", "root 1201 0.0 0.1 1234 567 ? Ss 12:00 0:00 sshd: [accepted]", ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := extractSSHUsername(tt.line)
+			if got != tt.expected {
+				t.Errorf("extractSSHUsername(%q) = %q, esperado %q", tt.line, got, tt.expected)
+			}
+		})
+	}
+}
+
+func TestParseSSHProcesses_ExcludesRootAndSystem(t *testing.T) {
+	monitor := NewMonitorService("")
+
+	// Simula apenas vpn1 e vpn2 com shell /bin/false
+	validUsers := map[string]bool{
+		"vpn1": true,
+		"vpn2": true,
+	}
+
+	// Simula a saída de processos contendo root (duas sessões, igual relatado pelo usuário),
+	// um administrador bash e conexões VPN válidas
+	rawOutput := `root     sshd: /usr/sbin/sshd -D [listener]
+root     sshd: root@pts/0
+root     sshd: root [priv]
+admin    sshd: admin@pts/1
+root     sshd: vpn1 [priv]
+vpn1     sshd: vpn1 [net]
+root     sshd: vpn2 [priv]
+vpn2     sshd: vpn2 [net]
+`
+
+	result := monitor.parseSSHProcesses(rawOutput, validUsers)
+
+	// Deve conter exatamente 2 usuários: vpn1 e vpn2
+	if len(result) != 2 {
+		t.Fatalf("Esperava 2 usuários online, obteve %d: %+v", len(result), result)
+	}
+
+	if result[0].Username != "vpn1" || result[1].Username != "vpn2" {
+		t.Errorf("Usuários inesperados: %+v", result)
+	}
+
+	// Verificar explicitamente que root e admin NÃO estão no resultado
+	for _, u := range result {
+		if u.Username == "root" {
+			t.Errorf("ERRO CRÍTICO: root NUNCA deve aparecer como usuário online!")
+		}
+		if u.Username == "admin" {
+			t.Errorf("ERRO: admin (com shell /bin/bash) não deve aparecer como usuário online!")
+		}
+	}
+}
+
+func TestParseSSHProcesses_OnlyRootActive(t *testing.T) {
+	monitor := NewMonitorService("")
+
+	validUsers := map[string]bool{
+		"vpn1": true,
+	}
+
+	// Cenário exato relatado pelo usuário: apenas root conectado no servidor
+	rawOutput := `root     sshd: /usr/sbin/sshd -D [listener]
+root     sshd: root@pts/0
+root     sshd: root@pts/1
+root     sshd: root [priv]
+`
+
+	result := monitor.parseSSHProcesses(rawOutput, validUsers)
+
+	// Não deve haver nenhum usuário online!
+	if len(result) != 0 {
+		t.Fatalf("Esperava 0 usuários online para sessões apenas do root, obteve %d: %+v", len(result), result)
+	}
+}
+
+func TestParseSSHProcesses_MultipleSessionsDeduplicated(t *testing.T) {
+	monitor := NewMonitorService("")
+
+	validUsers := map[string]bool{
+		"vpn1": true,
+	}
+
+	// vpn1 conectado em múltiplos túneis simultâneos
+	rawOutput := `root     sshd: vpn1 [priv]
+vpn1     sshd: vpn1 [net]
+root     sshd: vpn1 [priv]
+vpn1     sshd: vpn1 [net]
+vpn1     sshd: vpn1@notty
+`
+
+	result := monitor.parseSSHProcesses(rawOutput, validUsers)
+
+	if len(result) != 1 {
+		t.Fatalf("Esperava deduplicação para 1 usuário único, obteve %d: %+v", len(result), result)
+	}
+
+	if result[0].Username != "vpn1" {
+		t.Errorf("Esperava vpn1, obteve %s", result[0].Username)
+	}
+}
+
+func TestMonitorService_GetDetailedOnlineUsers_WithPasswd(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "monitor_passwd_test_*")
+	if err != nil {
+		t.Fatalf("Erro ao criar tempDir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	passwdContent := `root:x:0:0:root:/root:/bin/bash
+ubuntu:x:1000:1000:Ubuntu:/home/ubuntu:/bin/bash
+client1:x:1001:1001::/home/client1:/bin/false
+client2:x:1002:1002::/home/client2:/usr/bin/false
+`
+	passwdFile := filepath.Join(tempDir, "passwd")
+	if err := os.WriteFile(passwdFile, []byte(passwdContent), 0644); err != nil {
+		t.Fatalf("Erro ao escrever passwd: %v", err)
+	}
+
+	monitor := NewMonitorService("")
+	monitor.SetPasswdPath(passwdFile)
+
+	// Chamar GetDetailedOnlineUsers
+	res := monitor.GetDetailedOnlineUsers()
+
+	// SSHUsers não deve ser nil (deve ser slice vazio [])
+	if res.SSHUsers == nil {
+		t.Errorf("SSHUsers não deveria ser nil")
+	}
+
+	// Não deve ter root em SSHUsers
+	for _, u := range res.SSHUsers {
+		if u.Username == "root" {
+			t.Errorf("root não deve estar em SSHUsers")
+		}
+	}
+
+	// OnlineUsers também
+	onlineRes := monitor.GetOnlineUsers()
+	if onlineRes.SSHUsers < 0 {
+		t.Errorf("Total SSH users não deve ser negativo")
+	}
+}
+

@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -50,6 +51,9 @@ type MonitorService struct {
 	// Múltiplas instâncias / controle de limpeza
 	disableV2RayLogCleanup bool
 	logCleanupMutex        sync.Mutex
+
+	// Caminho do passwd para validação de shell (/etc/passwd por padrão)
+	passwdPath string
 }
 
 // NewMonitorService cria uma nova instância do serviço de monitoramento
@@ -70,6 +74,7 @@ func NewMonitorService(v2rayConfigPath string) *MonitorService {
 		v2rayLogRegex:          v2rayLogRegex,
 		v2rayConfigPath:        v2rayConfigPath,
 		v2rayAvailable:         false,
+		passwdPath:             "/etc/passwd",
 		disableV2RayLogCleanup: parseEnvBool("SENTINEL_DISABLE_V2RAY_LOG_CLEANUP", false),
 		v2rayLogPaths: []string{
 			"/var/log/xray/access.log",
@@ -80,6 +85,13 @@ func NewMonitorService(v2rayConfigPath string) *MonitorService {
 			"/usr/local/var/log/xray/access.log",
 		},
 	}
+}
+
+// SetPasswdPath define o caminho do arquivo passwd (útil para testes unitários ou customizações)
+func (m *MonitorService) SetPasswdPath(path string) {
+	m.mutex.Lock()
+	m.passwdPath = path
+	m.mutex.Unlock()
 }
 
 // Start inicia o serviço de monitoramento
@@ -138,8 +150,13 @@ func (m *MonitorService) GetOnlineUsers() models.OnlineUsersResponse {
 	m.mutex.RUnlock()
 
 	// Cache expirado, atualizar
+	m.updateSSHUsers()
 	m.updateV2RayUsers()
 	m.updateDTProtoUsers()
+
+	m.mutex.Lock()
+	m.cacheExpiry = time.Now().Add(m.cacheDuration)
+	m.mutex.Unlock()
 
 	m.mutex.RLock()
 	defer m.mutex.RUnlock()
@@ -152,6 +169,10 @@ func (m *MonitorService) GetDetailedOnlineUsers() models.DetailedUsersResponse {
 
 	// Verificar se o cache ainda é válido
 	if time.Now().Before(m.cacheExpiry) {
+		sshList := m.sshUsersList
+		if sshList == nil {
+			sshList = []models.SSHUserOnline{}
+		}
 		v2rayList := m.v2rayUsersList
 		if v2rayList == nil {
 			v2rayList = []models.V2RayUserOnline{}
@@ -161,18 +182,27 @@ func (m *MonitorService) GetDetailedOnlineUsers() models.DetailedUsersResponse {
 			dtProtoList = []models.DTProtoUserOnline{}
 		}
 		defer m.mutex.RUnlock()
-		return models.NewDetailedUsersResponse(m.sshUsersList, v2rayList, dtProtoList)
+		return models.NewDetailedUsersResponse(sshList, v2rayList, dtProtoList)
 	}
 	m.mutex.RUnlock()
 
 	// Cache expirado, atualizar
+	m.updateSSHUsers()
 	m.updateV2RayUsers()
 	m.updateDTProtoUsers()
+
+	m.mutex.Lock()
+	m.cacheExpiry = time.Now().Add(m.cacheDuration)
+	m.mutex.Unlock()
 
 	m.mutex.RLock()
 	defer m.mutex.RUnlock()
 
 	// Garantir que slices não sejam nil
+	sshList := m.sshUsersList
+	if sshList == nil {
+		sshList = []models.SSHUserOnline{}
+	}
 	v2rayList := m.v2rayUsersList
 	if v2rayList == nil {
 		v2rayList = []models.V2RayUserOnline{}
@@ -182,7 +212,7 @@ func (m *MonitorService) GetDetailedOnlineUsers() models.DetailedUsersResponse {
 		dtProtoList = []models.DTProtoUserOnline{}
 	}
 
-	return models.NewDetailedUsersResponse(m.sshUsersList, v2rayList, dtProtoList)
+	return models.NewDetailedUsersResponse(sshList, v2rayList, dtProtoList)
 }
 
 // ensureV2RayConfigAndLogs verifica se o V2Ray/Xray existe e auto-configura os logs se necessário
@@ -474,62 +504,29 @@ func (m *MonitorService) updateSSHUsers() {
 	log.Printf("👤 Usuários SSH online: %d", sshUsers)
 }
 
-// getSSHUsersList obtém a lista detalhada de usuários SSH online
-func (m *MonitorService) getSSHUsersList() []models.SSHUserOnline {
-	// Comando otimizado: processar apenas sshd diretamente, sem listar tudo
-	// pgrep retorna apenas PIDs de processos sshd, depois obtemos detalhes
-	cmd := exec.Command("sh", "-c", "pgrep -f 'sshd:' | xargs -r ps -o user= 2>/dev/null | grep -v '^root$' | sort -u || true")
-	output, err := cmd.Output()
-	if err != nil {
-		log.Printf("❌ Erro ao executar comando SSH otimizado: %v", err)
-		// Fallback para comando 'who'
-		return m.getSSHUsersListFallback()
-	}
+// sshUserRegex extrai o username dos argumentos do processo sshd (ex: sshd: user1 [priv], sshd: user1@pts/0)
+var sshUserRegex = regexp.MustCompile(`sshd:\s*([a-zA-Z0-9._-]+)`)
 
-	// Se não há output (nenhum usuário SSH), usar fallback
-	if len(strings.TrimSpace(string(output))) == 0 {
-		log.Printf("ℹ️ Nenhum usuário SSH encontrado pelo comando otimizado, usando fallback")
-		return m.getSSHUsersListFallback()
-	}
-
-	lines := strings.Split(string(output), "\n")
-	var users []models.SSHUserOnline
-	userMap := make(map[string]models.SSHUserOnline, 50) // Pre-alocar para ~50 usuários SSH
-
-	// Comando otimizado já retorna usernames únicos, sem duplicatas
-	for _, line := range lines {
-		username := strings.TrimSpace(line)
-		if username == "" {
-			continue
-		}
-
-		// Usar username como chave única (evitar duplicatas)
-		if _, exists := userMap[username]; !exists {
-			userMap[username] = models.SSHUserOnline{
-				Username: username,
-			}
+// extractSSHUsername extrai o username do título do processo sshd
+func extractSSHUsername(line string) string {
+	matches := sshUserRegex.FindStringSubmatch(line)
+	if len(matches) > 1 {
+		user := matches[1]
+		if !strings.Contains(user, "/") {
+			return user
 		}
 	}
-
-	// Converter map para slice
-	for _, user := range userMap {
-		users = append(users, user)
-	}
-
-	return users
+	return ""
 }
 
-// getSSHUsersListFallback fallback usando comando 'who'
-func (m *MonitorService) getSSHUsersListFallback() []models.SSHUserOnline {
-	cmd := exec.Command("who")
-	output, err := cmd.Output()
-	if err != nil {
-		log.Printf("❌ Erro ao executar comando 'who': %v", err)
+// parseSSHProcesses analisa a saída dos processos SSH e filtra apenas usuários válidos com /bin/false
+func (m *MonitorService) parseSSHProcesses(rawOutput string, validUsers map[string]bool) []models.SSHUserOnline {
+	if len(rawOutput) == 0 || len(validUsers) == 0 {
 		return []models.SSHUserOnline{}
 	}
 
-	lines := strings.Split(string(output), "\n")
-	var users []models.SSHUserOnline
+	onlineMap := make(map[string]struct{})
+	lines := strings.Split(rawOutput, "\n")
 
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
@@ -537,21 +534,74 @@ func (m *MonitorService) getSSHUsersListFallback() []models.SSHUserOnline {
 			continue
 		}
 
-		// Parse da saída do comando 'who'
-		// Formato: usuario pts/0 2024-01-15 10:30 (192.168.1.100)
 		fields := strings.Fields(line)
-		if len(fields) < 4 {
+		if len(fields) == 0 {
 			continue
 		}
 
-		username := fields[0]
+		// 1. Verificar coluna do usuário dono do processo (excluindo root e sistema)
+		userCol := fields[0]
+		if validUsers[userCol] {
+			onlineMap[userCol] = struct{}{}
+		}
 
+		// 2. Extrair username dos argumentos do processo (ex: "sshd: username [priv]", "sshd: username [net]", "sshd: username@pts/0")
+		if len(fields) > 1 {
+			if extractedUser := extractSSHUsername(line); extractedUser != "" {
+				if validUsers[extractedUser] {
+					onlineMap[extractedUser] = struct{}{}
+				}
+			}
+		}
+	}
+
+	users := make([]models.SSHUserOnline, 0, len(onlineMap))
+	for username := range onlineMap {
 		users = append(users, models.SSHUserOnline{
 			Username: username,
 		})
 	}
 
+	// Ordenação alfabética para garantir consistência e estabilidade na resposta JSON
+	sort.Slice(users, func(i, j int) bool {
+		return users[i].Username < users[j].Username
+	})
+
 	return users
+}
+
+// getSSHUsersList obtém a lista detalhada de usuários SSH online que possuem estritamente /bin/false
+func (m *MonitorService) getSSHUsersList() []models.SSHUserOnline {
+	passwdFile := m.passwdPath
+	if passwdFile == "" {
+		passwdFile = "/etc/passwd"
+	}
+
+	validUsers, err := utils.GetUsersWithBinFalseShell(passwdFile)
+	if err != nil {
+		// Se não conseguir ler /etc/passwd (ou arquivo inexistente no SO), retorna vazio
+		return []models.SSHUserOnline{}
+	}
+
+	if len(validUsers) == 0 {
+		return []models.SSHUserOnline{}
+	}
+
+	// Executar comando para detectar processos sshd diretamente
+	cmd := exec.Command("sh", "-c", "ps -C sshd,dropbear -o user=,args= 2>/dev/null || pgrep -f 'sshd:' | xargs -r ps -o user=,args= 2>/dev/null || true")
+	output, err := cmd.Output()
+	if err != nil {
+		log.Printf("⚠️ Erro ao executar comando de monitoramento SSH: %v", err)
+		return []models.SSHUserOnline{}
+	}
+
+	rawOutput := strings.TrimSpace(string(output))
+	if len(rawOutput) == 0 {
+		// Nenhum processo SSH ativo
+		return []models.SSHUserOnline{}
+	}
+
+	return m.parseSSHProcesses(rawOutput, validUsers)
 }
 
 // ReadLogTail lê de forma segura apenas os últimos maxBytes de um arquivo de log,
