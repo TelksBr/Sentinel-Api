@@ -28,7 +28,20 @@
           "host": ["{{baseUrl}}"],
           "path": [""]
         },
-        "description": "Verifica se a API está funcionando. Rota pública (sem autenticação)."
+        "description": "Verifica se a API está funcionando e retorna a versão. Rota pública (sem autenticação)."
+      }
+    },
+    {
+      "name": "Versão da API",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/version",
+          "host": ["{{baseUrl}}"],
+          "path": ["version"]
+        },
+        "description": "Retorna o número de versão da API. Rota pública (sem autenticação)."
       }
     },
     {

@@ -81,7 +81,8 @@ Authorization: Bearer <API_SENTINEL_KEY>
 ```
 
 **Rotas públicas** (sem autenticação):
-- `GET /` — Health check
+- `GET /` — Health check e versão da API
+- `GET /version` — Versão da API
 - `GET /onlines` — Contadores de usuários online
 - `GET /system/resources` — Recursos do sistema (CPU/RAM)
 
@@ -104,18 +105,32 @@ Quando excedido, retorna `429 Too Many Requests`:
 
 **Base URL:** `http://localhost:8080`
 
-### Health Check
+### Health Check e Versão
 
 #### `GET /`
 
-Verifica se a API está ativa.
+Verifica se a API está ativa e retorna o status acompanhado da versão instalada.
 
 **Autenticação:** Não
 
 **Resposta `200`:**
 ```json
 {
-  "message": "🟢 API running !"
+  "message": "🟢 API running !",
+  "version": "1.0.0"
+}
+```
+
+#### `GET /version`
+
+Retorna apenas o número da versão da API.
+
+**Autenticação:** Não
+
+**Resposta `200`:**
+```json
+{
+  "version": "1.0.0"
 }
 ```
 

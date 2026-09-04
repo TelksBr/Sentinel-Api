@@ -13,7 +13,12 @@ import (
 )
 
 // SetupRoutes configura todas as rotas da API
-func SetupRoutes(sshService *services.SSHService, v2rayService *services.V2RayService, monitorService *services.MonitorService, cronService *cron.CronjobService, authMiddleware *middleware.AuthMiddleware) *gin.Engine {
+func SetupRoutes(sshService *services.SSHService, v2rayService *services.V2RayService, monitorService *services.MonitorService, cronService *cron.CronjobService, authMiddleware *middleware.AuthMiddleware, version ...string) *gin.Engine {
+	apiVersion := "dev"
+	if len(version) > 0 && version[0] != "" {
+		apiVersion = version[0]
+	}
+
 	// Configurar Gin
 	gin.SetMode(gin.ReleaseMode)
 	r := gin.New()
@@ -33,7 +38,17 @@ func SetupRoutes(sshService *services.SSHService, v2rayService *services.V2RaySe
 
 	// Rota de health check (pública)
 	r.GET("/", func(c *gin.Context) {
-		c.JSON(200, gin.H{"message": "🟢 API running !"})
+		c.JSON(200, gin.H{
+			"message": "🟢 API running !",
+			"version": apiVersion,
+		})
+	})
+
+	// Rota de versão (pública)
+	r.GET("/version", func(c *gin.Context) {
+		c.JSON(200, gin.H{
+			"version": apiVersion,
+		})
 	})
 
 	// Rotas públicas (sem autenticação) — mantidas públicas para evitar

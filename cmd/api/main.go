@@ -84,7 +84,7 @@ func main() {
 
 	// Configurar rotas
 	authMiddleware := middleware.NewAuthMiddleware(apiKey)
-	router := routes.SetupRoutes(sshService, v2rayService, monitorService, cronService, authMiddleware)
+	router := routes.SetupRoutes(sshService, v2rayService, monitorService, cronService, authMiddleware, version)
 
 	// Iniciar servidor
 	addr := fmt.Sprintf(":%d", *port)
