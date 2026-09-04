@@ -15,11 +15,9 @@ func setupTestCronService(t *testing.T) (*CronjobService, string, func()) {
 	}
 
 	cronFile := filepath.Join(tempDir, "cronjobs.json")
-	lockFile := filepath.Join(tempDir, "cronjobs.lock")
 	_ = os.WriteFile(cronFile, []byte("[]"), 0644)
 
 	os.Setenv("SENTINEL_CRONJOBS_FILE", cronFile)
-	os.Setenv("SENTINEL_CRONJOBS_LOCK_FILE", lockFile)
 
 	sshService := services.NewSSHService()
 	v2rayService := services.NewV2RayService()
@@ -31,7 +29,6 @@ func setupTestCronService(t *testing.T) (*CronjobService, string, func()) {
 
 	cleanup := func() {
 		os.Unsetenv("SENTINEL_CRONJOBS_FILE")
-		os.Unsetenv("SENTINEL_CRONJOBS_LOCK_FILE")
 		os.RemoveAll(tempDir)
 	}
 

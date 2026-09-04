@@ -5,7 +5,6 @@ go 1.27
 require (
 	github.com/gin-gonic/gin v1.12.0
 	github.com/go-playground/validator/v10 v10.30.3
-	github.com/gofrs/flock v0.13.1
 	github.com/robfig/cron/v3 v3.0.1
 	github.com/tidwall/gjson v1.19.0
 	github.com/tidwall/pretty v1.2.1

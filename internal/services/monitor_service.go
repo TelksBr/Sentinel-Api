@@ -15,8 +15,6 @@ import (
 
 	"api-v2/internal/models"
 	"api-v2/internal/utils"
-
-	"github.com/gofrs/flock"
 )
 
 // MonitorService implementa o serviço de monitoramento de usuários online
@@ -49,11 +47,9 @@ type MonitorService struct {
 	// Regex pre-compilado para evitar recompilação a cada linha
 	v2rayLogRegex *regexp.Regexp
 
-	// Múltiplas instâncias: limpeza do log reescreve o ficheiro — só uma deve fazê-lo.
-	// SENTINEL_DISABLE_V2RAY_LOG_CLEANUP=true desativa a goroutine de limpeza (recomendado com N replicas).
+	// Múltiplas instâncias / controle de limpeza
 	disableV2RayLogCleanup bool
-	// SENTINEL_V2RAY_CLEANUP_LOCK_FILE=/caminho/lock (opcional); default = <access.log>.cleanup.lock
-	v2rayCleanupLockFile string
+	logCleanupMutex        sync.Mutex
 }
 
 // NewMonitorService cria uma nova instância do serviço de monitoramento
@@ -75,7 +71,6 @@ func NewMonitorService(v2rayConfigPath string) *MonitorService {
 		v2rayConfigPath:        v2rayConfigPath,
 		v2rayAvailable:         false,
 		disableV2RayLogCleanup: parseEnvBool("SENTINEL_DISABLE_V2RAY_LOG_CLEANUP", false),
-		v2rayCleanupLockFile:   strings.TrimSpace(os.Getenv("SENTINEL_V2RAY_CLEANUP_LOCK_FILE")),
 		v2rayLogPaths: []string{
 			"/var/log/xray/access.log",
 			"/usr/local/etc/xray/access.log",
@@ -612,18 +607,8 @@ func (m *MonitorService) safeTrimLargeLogFile(filePath string, maxBytes int64, k
 		return false
 	}
 
-	lockPath := m.v2rayCleanupLockFile
-	if lockPath == "" {
-		lockPath = filePath + ".cleanup.lock"
-	}
-	fl := flock.New(lockPath)
-	if err := fl.Lock(); err != nil {
-		log.Printf("⚠️ Erro ao obter lock para otimização de log (%s): %v", filePath, err)
-		return false
-	}
-	defer func() {
-		_ = fl.Unlock()
-	}()
+	m.logCleanupMutex.Lock()
+	defer m.logCleanupMutex.Unlock()
 
 	// Re-checar tamanho após lock para garantir que outra rotina não o tenha feito
 	stat, err = os.Stat(filePath)
@@ -915,20 +900,8 @@ func (m *MonitorService) performV2RayLogCleanup() {
 	}
 
 	// 2. Se o arquivo estiver em tamanho seguro (<= 20 MB), faz a limpeza por timestamp
-	lockPath := m.v2rayCleanupLockFile
-	if lockPath == "" {
-		lockPath = m.currentLogPath + ".cleanup.lock"
-	}
-	fl := flock.New(lockPath)
-	if err := fl.Lock(); err != nil {
-		log.Printf("❌ Erro ao obter lock de limpeza do log V2Ray (%s): %v", lockPath, err)
-		return
-	}
-	defer func() {
-		if uerr := fl.Unlock(); uerr != nil {
-			log.Printf("⚠️ Erro ao libertar lock de limpeza do log V2Ray: %v", uerr)
-		}
-	}()
+	m.logCleanupMutex.Lock()
+	defer m.logCleanupMutex.Unlock()
 
 	log.Println("🧹 Iniciando limpeza de logs V2Ray antigos...")
 

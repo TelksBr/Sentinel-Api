@@ -11,7 +11,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/gofrs/flock"
 	"github.com/robfig/cron/v3"
 )
 
@@ -31,35 +30,18 @@ func cronjobDirPath() string {
 	return filepath.Dir(cronjobFilePath())
 }
 
-// cronjobStoreLockPath ficheiro de lock entre processos para cronjobs.json.
-// SENTINEL_CRONJOBS_LOCK_FILE sobrescreve (recomendado com várias instâncias).
-func cronjobStoreLockPath() string {
-	if p := strings.TrimSpace(os.Getenv("SENTINEL_CRONJOBS_LOCK_FILE")); p != "" {
-		return p
-	}
-	return cronjobFilePath() + ".sentinel.lock"
-}
-
 // CronjobService gerencia os cronjobs da aplicação
 type CronjobService struct {
 	cron         *cron.Cron
 	sshService   *services.SSHService
 	v2rayService *services.V2RayService
-	fileMutex    sync.Mutex // protege leitura/escrita do arquivo cronjobs.json (intra-processo)
+	fileMutex    sync.Mutex // protege leitura/escrita do arquivo cronjobs.json
 }
 
-// lockCronjobStore bloqueia até obter mutex + flock exclusivo no store partilhado entre APIs.
+// lockCronjobStore bloqueia via mutex em memória
 func (cs *CronjobService) lockCronjobStore() (unlock func(), err error) {
 	cs.fileMutex.Lock()
-	fl := flock.New(cronjobStoreLockPath())
-	if err := fl.Lock(); err != nil {
-		cs.fileMutex.Unlock()
-		return nil, err
-	}
 	return func() {
-		if uerr := fl.Unlock(); uerr != nil {
-			log.Printf("Erro ao libertar lock do store de cronjobs: %v", uerr)
-		}
 		cs.fileMutex.Unlock()
 	}, nil
 }
@@ -69,20 +51,10 @@ func NewCronjobService(sshService *services.SSHService, v2rayService *services.V
 	// Criar diretório se não existir
 	_ = os.MkdirAll(cronjobDirPath(), 0755)
 
-	// Criar arquivo de cronjobs se não existir (com lock para várias instâncias no arranque)
-	fl := flock.New(cronjobStoreLockPath())
-	if err := fl.Lock(); err != nil {
-		log.Printf("Aviso: não foi possível obter lock para inicializar cronjobs.json: %v", err)
-	} else {
-		defer func() {
-			if uerr := fl.Unlock(); uerr != nil {
-				log.Printf("Erro ao libertar lock após init cronjobs.json: %v", uerr)
-			}
-		}()
-		if _, err := os.Stat(cronjobFilePath()); os.IsNotExist(err) {
-			if err := os.WriteFile(cronjobFilePath(), []byte("[]"), 0644); err != nil {
-				log.Printf("Erro ao criar cronjobs.json: %v", err)
-			}
+	// Criar arquivo de cronjobs se não existir
+	if _, err := os.Stat(cronjobFilePath()); os.IsNotExist(err) {
+		if err := os.WriteFile(cronjobFilePath(), []byte("[]"), 0644); err != nil {
+			log.Printf("Erro ao criar cronjobs.json: %v", err)
 		}
 	}
 

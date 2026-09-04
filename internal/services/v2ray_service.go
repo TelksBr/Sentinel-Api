@@ -10,7 +10,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/gofrs/flock"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/pretty"
 	"github.com/tidwall/sjson"
@@ -31,27 +30,10 @@ func NewV2RayService() *V2RayService {
 	return &V2RayService{}
 }
 
-// configWriteLockPath caminho do lock entre processos para escrita no config.json.
-// SENTINEL_V2RAY_CONFIG_LOCK_FILE sobrescreve (recomendado com várias instâncias).
-func (s *V2RayService) configWriteLockPath() string {
-	if p := strings.TrimSpace(os.Getenv("SENTINEL_V2RAY_CONFIG_LOCK_FILE")); p != "" {
-		return p
-	}
-	return s.getConfigPath() + ".sentinel.lock"
-}
-
-// lockConfigWrite bloqueia até obter o mutex do serviço e um flock exclusivo no ficheiro de lock.
+// lockConfigWrite bloqueia via mutex em memória do serviço
 func (s *V2RayService) lockConfigWrite() (unlock func(), err error) {
 	s.mutex.Lock()
-	fl := flock.New(s.configWriteLockPath())
-	if err := fl.Lock(); err != nil {
-		s.mutex.Unlock()
-		return nil, err
-	}
 	return func() {
-		if uerr := fl.Unlock(); uerr != nil {
-			utils.WriteLog(fmt.Sprintf("Erro ao libertar lock de escrita do config V2Ray: %v", uerr))
-		}
 		s.mutex.Unlock()
 	}, nil
 }

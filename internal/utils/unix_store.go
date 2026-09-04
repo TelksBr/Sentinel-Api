@@ -9,8 +9,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-
-	"github.com/gofrs/flock"
 )
 
 const (
@@ -65,8 +63,6 @@ type GShadowEntry struct {
 // UnixStore gerencia as tabelas de usuários do Unix em memória com sincronização atômica.
 type UnixStore struct {
 	baseDir  string
-	lockPath string
-	flock    *flock.Flock
 	mutex    sync.Mutex
 
 	Passwd  []PasswdEntry
@@ -85,11 +81,8 @@ func NewUnixStore(baseDir string) *UnixStore {
 	if baseDir == "" {
 		baseDir = DefaultBaseDir
 	}
-	lockPath := filepath.Join(baseDir, ".pwd.lock")
 	return &UnixStore{
 		baseDir:    baseDir,
-		lockPath:   lockPath,
-		flock:      flock.New(lockPath),
 		passwdMap:  make(map[string]int),
 		shadowMap:  make(map[string]int),
 		groupMap:   make(map[string]int),
@@ -100,16 +93,10 @@ func NewUnixStore(baseDir string) *UnixStore {
 // DefaultUnixStore singleton global para operações no sistema Linux.
 var DefaultUnixStore = NewUnixStore(DefaultBaseDir)
 
-// Lock adquire o lock de processo e o flock do sistema (/etc/.pwd.lock).
+// Lock adquire o mutex de memória do UnixStore.
 func (s *UnixStore) Lock() (func(), error) {
 	s.mutex.Lock()
-	if err := s.flock.Lock(); err != nil {
-		s.mutex.Unlock()
-		return nil, fmt.Errorf("falha ao adquirir lock do UnixStore (%s): %w", s.lockPath, err)
-	}
-
 	return func() {
-		_ = s.flock.Unlock()
 		s.mutex.Unlock()
 	}, nil
 }
