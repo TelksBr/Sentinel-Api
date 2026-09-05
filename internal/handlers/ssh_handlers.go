@@ -113,6 +113,11 @@ func (h *SSHHandlers) UpdateUser(c *gin.Context) {
 		results = append(results, result)
 	}
 
+	if updateRequest.Limit != nil {
+		result = h.sshService.UpdateLimit(username, *updateRequest.Limit)
+		results = append(results, result)
+	}
+
 	if len(results) == 0 {
 		HandleBadRequest(c, "Nenhum parâmetro de atualização válido fornecido.")
 		return

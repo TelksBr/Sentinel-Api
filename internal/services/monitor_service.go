@@ -23,6 +23,7 @@ type MonitorService struct {
 	sshUsers     int
 	v2rayUsers   int
 	dtProtoUsers int
+	vtproxyUsers int
 	mutex        sync.RWMutex
 	stopChan     chan bool
 
@@ -30,6 +31,7 @@ type MonitorService struct {
 	sshUsersList     []models.SSHUserOnline
 	v2rayUsersList   []models.V2RayUserOnline
 	dtProtoUsersList []models.DTProtoUserOnline
+	vtproxyUsersList []models.VTProxyUserOnline
 
 	// Cache de UUIDs V2Ray (email -> uuid) - pre-alocado
 	v2rayUUIDCache map[string]string
@@ -65,11 +67,13 @@ func NewMonitorService(v2rayConfigPath string) *MonitorService {
 		sshUsers:               0,
 		v2rayUsers:             0,
 		dtProtoUsers:           0,
+		vtproxyUsers:           0,
 		stopChan:               make(chan bool),
 		v2rayUUIDCache:         make(map[string]string, 100),
 		sshUsersList:           make([]models.SSHUserOnline, 0, 50),
 		v2rayUsersList:         make([]models.V2RayUserOnline, 0, 100),
 		dtProtoUsersList:       make([]models.DTProtoUserOnline, 0, 100),
+		vtproxyUsersList:       make([]models.VTProxyUserOnline, 0, 50),
 		cacheDuration:          10 * time.Second,
 		v2rayLogRegex:          v2rayLogRegex,
 		v2rayConfigPath:        v2rayConfigPath,
@@ -113,6 +117,7 @@ func (m *MonitorService) Start() {
 	go m.monitorSSHUsers()
 	go m.monitorV2RayUsers()
 	go m.monitorDTProtoUsers()
+	go m.monitorVTProxyUsers()
 	if m.disableV2RayLogCleanup {
 		log.Println("ℹ️ Limpeza automática do access.log desativada (SENTINEL_DISABLE_V2RAY_LOG_CLEANUP); várias instâncias podem partilhar o log sem escrita concorrente.")
 	} else {
@@ -133,6 +138,8 @@ func (m *MonitorService) Stop() {
 	m.v2rayUUIDCache = nil
 	m.sshUsersList = nil
 	m.v2rayUsersList = nil
+	m.dtProtoUsersList = nil
+	m.vtproxyUsersList = nil
 	m.mutex.Unlock()
 
 	log.Println("✅ Serviço de monitoramento parado")
@@ -145,7 +152,7 @@ func (m *MonitorService) GetOnlineUsers() models.OnlineUsersResponse {
 	// Verificar se o cache ainda é válido
 	if time.Now().Before(m.cacheExpiry) {
 		defer m.mutex.RUnlock()
-		return models.NewOnlineUsersResponse(m.sshUsers, m.v2rayUsers, m.dtProtoUsers)
+		return models.NewOnlineUsersResponse(m.sshUsers, m.v2rayUsers, m.dtProtoUsers, m.vtproxyUsers)
 	}
 	m.mutex.RUnlock()
 
@@ -153,6 +160,7 @@ func (m *MonitorService) GetOnlineUsers() models.OnlineUsersResponse {
 	m.updateSSHUsers()
 	m.updateV2RayUsers()
 	m.updateDTProtoUsers()
+	m.updateVTProxyUsers()
 
 	m.mutex.Lock()
 	m.cacheExpiry = time.Now().Add(m.cacheDuration)
@@ -160,7 +168,7 @@ func (m *MonitorService) GetOnlineUsers() models.OnlineUsersResponse {
 
 	m.mutex.RLock()
 	defer m.mutex.RUnlock()
-	return models.NewOnlineUsersResponse(m.sshUsers, m.v2rayUsers, m.dtProtoUsers)
+	return models.NewOnlineUsersResponse(m.sshUsers, m.v2rayUsers, m.dtProtoUsers, m.vtproxyUsers)
 }
 
 // GetDetailedOnlineUsers retorna a lista detalhada de usuários online do cache
@@ -181,8 +189,12 @@ func (m *MonitorService) GetDetailedOnlineUsers() models.DetailedUsersResponse {
 		if dtProtoList == nil {
 			dtProtoList = []models.DTProtoUserOnline{}
 		}
+		vtproxyList := m.vtproxyUsersList
+		if vtproxyList == nil {
+			vtproxyList = []models.VTProxyUserOnline{}
+		}
 		defer m.mutex.RUnlock()
-		return models.NewDetailedUsersResponse(sshList, v2rayList, dtProtoList)
+		return models.NewDetailedUsersResponse(sshList, v2rayList, dtProtoList, vtproxyList)
 	}
 	m.mutex.RUnlock()
 
@@ -190,6 +202,7 @@ func (m *MonitorService) GetDetailedOnlineUsers() models.DetailedUsersResponse {
 	m.updateSSHUsers()
 	m.updateV2RayUsers()
 	m.updateDTProtoUsers()
+	m.updateVTProxyUsers()
 
 	m.mutex.Lock()
 	m.cacheExpiry = time.Now().Add(m.cacheDuration)
@@ -211,8 +224,12 @@ func (m *MonitorService) GetDetailedOnlineUsers() models.DetailedUsersResponse {
 	if dtProtoList == nil {
 		dtProtoList = []models.DTProtoUserOnline{}
 	}
+	vtproxyList := m.vtproxyUsersList
+	if vtproxyList == nil {
+		vtproxyList = []models.VTProxyUserOnline{}
+	}
 
-	return models.NewDetailedUsersResponse(sshList, v2rayList, dtProtoList)
+	return models.NewDetailedUsersResponse(sshList, v2rayList, dtProtoList, vtproxyList)
 }
 
 // ensureV2RayConfigAndLogs verifica se o V2Ray/Xray existe e auto-configura os logs se necessário
@@ -921,6 +938,61 @@ func (m *MonitorService) updateDTProtoUsers() {
 	m.mutex.Unlock()
 
 	log.Printf("🔗 Usuários DT-Proto online: %d", dtProtoUsers)
+}
+
+// updateVTProxyUsers atualiza o número e lista de usuários VTproxy online via /usr/local/bin/proxy-server --onlines-json
+func (m *MonitorService) updateVTProxyUsers() {
+	res, err := utils.GetProxyOnlineUsers()
+	if err != nil {
+		m.mutex.Lock()
+		m.vtproxyUsers = 0
+		m.vtproxyUsersList = []models.VTProxyUserOnline{}
+		m.mutex.Unlock()
+		return
+	}
+
+	vtproxyUsersList := make([]models.VTProxyUserOnline, 0, len(res.Users))
+	for username, count := range res.Users {
+		vtproxyUsersList = append(vtproxyUsersList, models.VTProxyUserOnline{
+			Username:    username,
+			Connections: count,
+			Count:       count,
+		})
+	}
+
+	sort.Slice(vtproxyUsersList, func(i, j int) bool {
+		return vtproxyUsersList[i].Username < vtproxyUsersList[j].Username
+	})
+
+	vtproxyUsers := len(vtproxyUsersList)
+	if res.Total > 0 && vtproxyUsers == 0 {
+		vtproxyUsers = res.Total
+	}
+
+	m.mutex.Lock()
+	m.vtproxyUsers = vtproxyUsers
+	m.vtproxyUsersList = vtproxyUsersList
+	m.mutex.Unlock()
+
+	log.Printf("🔌 Usuários VTproxy online: %d (conexões totais: %d)", len(vtproxyUsersList), res.Total)
+}
+
+// monitorVTProxyUsers monitora usuários VTproxy online periodicamente
+func (m *MonitorService) monitorVTProxyUsers() {
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+
+	// Atualizar imediatamente
+	m.updateVTProxyUsers()
+
+	for {
+		select {
+		case <-ticker.C:
+			m.updateVTProxyUsers()
+		case <-m.stopChan:
+			return
+		}
+	}
 }
 
 // cleanV2RayLogs limpa logs V2Ray antigos

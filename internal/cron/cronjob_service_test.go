@@ -70,3 +70,12 @@ func TestCronjobService_RemovePendingJobs(t *testing.T) {
 		t.Errorf("RemoveAllPendingSSHTestCronjobs falhou: %v", err)
 	}
 }
+
+func TestCronjobService_ExecuteExpiredSSHUsers(t *testing.T) {
+	cs, _, cleanup := setupTestCronService(t)
+	defer cleanup()
+
+	// Chamar executeExpiredSSHUsers diretamente para garantir que não ocorra pânico
+	cs.executeExpiredSSHUsers()
+}
+

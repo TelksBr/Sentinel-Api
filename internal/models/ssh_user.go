@@ -59,12 +59,14 @@ type SSHUserTestRequest struct {
 	Username string `json:"username" validate:"required,min=3,max=32,ssh_username"`
 	Password string `json:"password" validate:"required,min=4"`
 	Time     int    `json:"time" validate:"required,min=1,max=72"`
+	Limit    int    `json:"limit" validate:"min=0"`
 }
 
 // SSHUserUpdateRequest representa a requisição de atualização SSH
 type SSHUserUpdateRequest struct {
 	Password     *string `json:"password,omitempty"`
 	ValidateDays *int    `json:"validate,omitempty" validate:"omitempty,min=1"`
+	Limit        *int    `json:"limit,omitempty" validate:"omitempty,min=0"`
 }
 
 // SSHUserEnableRequest representa a requisição de habilitação SSH
@@ -92,6 +94,9 @@ func (r *SSHUserUpdateRequest) Validate() error {
 	}
 	if r.ValidateDays != nil && *r.ValidateDays < 1 {
 		return fmt.Errorf("os dias de validade devem ser no mínimo 1")
+	}
+	if r.Limit != nil && *r.Limit < 0 {
+		return fmt.Errorf("o limite deve ser maior ou igual a 0")
 	}
 	return nil
 }

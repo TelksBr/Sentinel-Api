@@ -70,6 +70,7 @@ func (cs *CronjobService) Start() error {
 	// Execução e limpeza imediata no arranque para eliminar lixo pendente do boot anterior
 	go cs.executeTestUserCronjobs()
 	go cs.executeExpiredV2RayUsers()
+	go cs.executeExpiredSSHUsers()
 
 	// Cronjob 1: Usuários de teste SSH (a cada 5 minutos)
 	_, err := cs.cron.AddFunc("*/5 * * * *", cs.executeTestUserCronjobs)
@@ -83,8 +84,14 @@ func (cs *CronjobService) Start() error {
 		return fmt.Errorf("erro ao adicionar cronjob de usuários V2Ray expirados: %v", err)
 	}
 
+	// Cronjob 3: Usuários SSH expirados (a cada 5 minutos)
+	_, err = cs.cron.AddFunc("*/5 * * * *", cs.executeExpiredSSHUsers)
+	if err != nil {
+		return fmt.Errorf("erro ao adicionar cronjob de usuários SSH expirados: %v", err)
+	}
+
 	cs.cron.Start()
-	log.Println("Serviço de cronjobs iniciado (SSH e V2Ray: a cada 5 minutos).")
+	log.Println("Serviço de cronjobs iniciado (SSH Teste, SSH Expirados e V2Ray: a cada 5 minutos).")
 	return nil
 }
 
@@ -288,6 +295,14 @@ func (cs *CronjobService) executeExpiredV2RayUsers() {
 		log.Printf("Erro ao remover usuários V2Ray expirados: %v", err)
 	} else {
 		log.Println("Monitoramento de usuários V2Ray expirados concluído.")
+	}
+}
+
+// executeExpiredSSHUsers executa remoção periódica de usuários SSH expirados (expire_days <= hoje) e derruba seus túneis
+func (cs *CronjobService) executeExpiredSSHUsers() {
+	result := cs.sshService.DeleteExpiredUsers()
+	if result.TotalDeleted > 0 {
+		log.Printf("🧹 [Cronjob] Limpeza automática de %d usuários SSH expirados concluída", result.TotalDeleted)
 	}
 }
 

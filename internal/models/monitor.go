@@ -7,16 +7,20 @@ type OnlineUsersResponse struct {
 	SSHUsers     int `json:"ssh_users"`
 	V2RayUsers   int `json:"v2ray_users"`
 	DTProtoUsers int `json:"dt_proto_users"`
+	VTproxy      int `json:"VTproxy"`
+	VTProxyUsers int `json:"vtproxy_users,omitempty"`
 	TotalUsers   int `json:"total_users"`
 }
 
 // NewOnlineUsersResponse cria uma nova resposta de usuários online
-func NewOnlineUsersResponse(sshUsers, v2rayUsers, dtProtoUsers int) OnlineUsersResponse {
+func NewOnlineUsersResponse(sshUsers, v2rayUsers, dtProtoUsers, vtproxyUsers int) OnlineUsersResponse {
 	return OnlineUsersResponse{
 		SSHUsers:     sshUsers,
 		V2RayUsers:   v2rayUsers,
 		DTProtoUsers: dtProtoUsers,
-		TotalUsers:   sshUsers + v2rayUsers + dtProtoUsers,
+		VTproxy:      vtproxyUsers,
+		VTProxyUsers: vtproxyUsers,
+		TotalUsers:   sshUsers + v2rayUsers + dtProtoUsers + vtproxyUsers,
 	}
 }
 
@@ -37,27 +41,40 @@ type DTProtoUserOnline struct {
 	ID string `json:"id"`
 }
 
+// VTProxyUserOnline representa um usuário VTproxy online
+type VTProxyUserOnline struct {
+	Username    string `json:"username"`
+	Connections int    `json:"connections"`
+	Count       int    `json:"count,omitempty"`
+}
+
 // DetailedUsersResponse representa a resposta detalhada de usuários online
 type DetailedUsersResponse struct {
 	SSHUsers     []SSHUserOnline     `json:"ssh_users"`
 	V2RayUsers   []V2RayUserOnline   `json:"v2ray_users"`
 	DTProtoUsers []DTProtoUserOnline `json:"dt_proto_users"`
+	VTproxy      []VTProxyUserOnline `json:"VTproxy"`
+	VTProxyUsers []VTProxyUserOnline `json:"vtproxy_users,omitempty"`
 	TotalSSH     int                 `json:"total_ssh"`
 	TotalV2Ray   int                 `json:"total_v2ray"`
 	TotalDTProto int                 `json:"total_dt_proto"`
+	TotalVTProxy int                 `json:"total_vtproxy"`
 	TotalUsers   int                 `json:"total_users"`
 }
 
 // NewDetailedUsersResponse cria uma nova resposta detalhada de usuários online
-func NewDetailedUsersResponse(sshUsers []SSHUserOnline, v2rayUsers []V2RayUserOnline, dtProtoUsers []DTProtoUserOnline) DetailedUsersResponse {
+func NewDetailedUsersResponse(sshUsers []SSHUserOnline, v2rayUsers []V2RayUserOnline, dtProtoUsers []DTProtoUserOnline, vtproxyUsers []VTProxyUserOnline) DetailedUsersResponse {
 	return DetailedUsersResponse{
 		SSHUsers:     sshUsers,
 		V2RayUsers:   v2rayUsers,
 		DTProtoUsers: dtProtoUsers,
+		VTproxy:      vtproxyUsers,
+		VTProxyUsers: vtproxyUsers,
 		TotalSSH:     len(sshUsers),
 		TotalV2Ray:   len(v2rayUsers),
 		TotalDTProto: len(dtProtoUsers),
-		TotalUsers:   len(sshUsers) + len(v2rayUsers) + len(dtProtoUsers),
+		TotalVTProxy: len(vtproxyUsers),
+		TotalUsers:   len(sshUsers) + len(v2rayUsers) + len(dtProtoUsers) + len(vtproxyUsers),
 	}
 }
 

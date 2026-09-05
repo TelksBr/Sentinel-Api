@@ -64,9 +64,13 @@ func TestUnixStore_LoadAndSave(t *testing.T) {
 
 	// Adicionar um novo usuário
 	hash, _ := Sha512Crypt("senha123", "salt1234", 5000)
-	isNew := store.UpsertUser("novousuario", hash, 0, 0, DaysToShadowExpireDays(30), "/bin/false")
+	isNew := store.UpsertUser("novousuario", hash, 0, 0, DaysToShadowExpireDays(30), "/bin/false", 2)
 	if !isNew {
 		t.Errorf("Esperava que novousuario fosse novo")
+	}
+
+	if limit, exists := store.GetUserLimit("novousuario"); !exists || limit != 2 {
+		t.Errorf("Esperava limite 2 para novousuario, obteve %d (exists=%v)", limit, exists)
 	}
 
 	if err := store.Save(); err != nil {
@@ -129,9 +133,9 @@ func TestUnixStore_DeleteBatch(t *testing.T) {
 	}
 
 	// Adicionar mais usuários
-	store.UpsertUser("user1", "$6$hash1", 2001, 2001, "19900", "/bin/false")
-	store.UpsertUser("user2", "$6$hash2", 2002, 2002, "19900", "/bin/false")
-	store.UpsertUser("user3", "$6$hash3", 2003, 2003, "19900", "/bin/false")
+	store.UpsertUser("user1", "$6$hash1", 2001, 2001, "19900", "/bin/false", 0)
+	store.UpsertUser("user2", "$6$hash2", 2002, 2002, "19900", "/bin/false", 0)
+	store.UpsertUser("user3", "$6$hash3", 2003, 2003, "19900", "/bin/false", 0)
 	_ = store.Save()
 
 	deletedUIDs, notFound, sysUsers := store.DeleteUsers([]string{"user1", "user3", "root", "naoexiste"})
@@ -226,10 +230,10 @@ func TestUnixStore_CountSSHUsers(t *testing.T) {
 
 	// Adicionar 5 novos usuários SSH
 	for i := 1; i <= 5; i++ {
-		store.UpsertUser(fmt.Sprintf("user%d", i), "$6$hash", 2000+i, 2000+i, "19900", "/bin/false")
+		store.UpsertUser(fmt.Sprintf("user%d", i), "$6$hash", 2000+i, 2000+i, "19900", "/bin/false", 0)
 	}
 	// Adicionar 1 usuário admin com /bin/bash (não deve contar como túnel SSH)
-	store.UpsertUser("admin_bash", "$6$hash", 3000, 3000, "", "/bin/bash")
+	store.UpsertUser("admin_bash", "$6$hash", 3000, 3000, "", "/bin/bash", 0)
 	_ = store.Save()
 
 	if count := store.CountSSHUsers(); count != 6 {
@@ -259,10 +263,10 @@ func TestUnixStore_CountExpiredSSHUsers(t *testing.T) {
 	}
 
 	// Adicionar 1 expirado, 1 válido, 1 sem expiração, 1 expirado com bash
-	store.UpsertUser("exp1", "$6$hash", 2001, 2001, "1000", "/bin/false")
-	store.UpsertUser("val1", "$6$hash", 2002, 2002, DaysToShadowExpireDays(30), "/bin/false")
-	store.UpsertUser("no_exp", "$6$hash", 2003, 2003, "", "/bin/false")
-	store.UpsertUser("exp_bash", "$6$hash", 2004, 2004, "1000", "/bin/bash")
+	store.UpsertUser("exp1", "$6$hash", 2001, 2001, "1000", "/bin/false", 0)
+	store.UpsertUser("val1", "$6$hash", 2002, 2002, DaysToShadowExpireDays(30), "/bin/false", 0)
+	store.UpsertUser("no_exp", "$6$hash", 2003, 2003, "", "/bin/false", 0)
+	store.UpsertUser("exp_bash", "$6$hash", 2004, 2004, "1000", "/bin/bash", 0)
 	_ = store.Save()
 
 	// existinguser + exp1 = 2 expirados
@@ -289,10 +293,10 @@ func TestUnixStore_DeleteExpiredUsers(t *testing.T) {
 	// - valid1 (válido: 30 dias no futuro)
 	// - no_expire (sem data de expiração: "")
 	// - expired_bash (expirado mas com shell /bin/bash -> não deve ser deletado)
-	store.UpsertUser("expired1", "$6$hash", 2001, 2001, "1000", "/bin/false")
-	store.UpsertUser("valid1", "$6$hash", 2002, 2002, DaysToShadowExpireDays(30), "/bin/false")
-	store.UpsertUser("no_expire", "$6$hash", 2003, 2003, "", "/bin/false")
-	store.UpsertUser("expired_bash", "$6$hash", 2004, 2004, "1000", "/bin/bash")
+	store.UpsertUser("expired1", "$6$hash", 2001, 2001, "1000", "/bin/false", 0)
+	store.UpsertUser("valid1", "$6$hash", 2002, 2002, DaysToShadowExpireDays(30), "/bin/false", 0)
+	store.UpsertUser("no_expire", "$6$hash", 2003, 2003, "", "/bin/false", 0)
+	store.UpsertUser("expired_bash", "$6$hash", 2004, 2004, "1000", "/bin/bash", 0)
 	_ = store.Save()
 
 	deletedUsernames, deletedUIDs, totalDeleted := store.DeleteExpiredUsers()
@@ -329,4 +333,82 @@ func TestUnixStore_DeleteExpiredUsers(t *testing.T) {
 		}
 	}
 }
+
+func TestUnixStore_GECOSLimit(t *testing.T) {
+	// 1. Testar helpers de formatação e parsing
+	if s := FormatLimitGECOS(2); s != "limit=2" {
+		t.Errorf("FormatLimitGECOS(2) = %s, esperava limit=2", s)
+	}
+	if s := FormatLimitGECOS(0); s != "limit=0" {
+		t.Errorf("FormatLimitGECOS(0) = %s, esperava limit=0", s)
+	}
+	if s := FormatLimitGECOS(-1); s != "limit=0" {
+		t.Errorf("FormatLimitGECOS(-1) = %s, esperava limit=0", s)
+	}
+
+	if n := ParseLimitGECOS("limit=2"); n != 2 {
+		t.Errorf("ParseLimitGECOS('limit=2') = %d, esperava 2", n)
+	}
+	if n := ParseLimitGECOS("2"); n != 2 {
+		t.Errorf("ParseLimitGECOS('2') = %d, esperava 2", n)
+	}
+	if n := ParseLimitGECOS("Nome,limit=5,1234"); n != 5 {
+		t.Errorf("ParseLimitGECOS('Nome,limit=5,1234') = %d, esperava 5", n)
+	}
+	if n := ParseLimitGECOS(""); n != 0 {
+		t.Errorf("ParseLimitGECOS('') = %d, esperava 0", n)
+	}
+	if n := ParseLimitGECOS("invalido"); n != 0 {
+		t.Errorf("ParseLimitGECOS('invalido') = %d, esperava 0", n)
+	}
+
+	// 2. Testar persistência em arquivo
+	tempDir, cleanup := createMockUnixEnv(t)
+	defer cleanup()
+
+	store := NewUnixStore(tempDir)
+	if err := store.Load(); err != nil {
+		t.Fatalf("Erro ao carregar store: %v", err)
+	}
+
+	// Criar usuário com limit 3
+	store.UpsertUser("user_limit", "$6$hash", 2050, 2050, "19900", "/bin/false", 3)
+	if err := store.Save(); err != nil {
+		t.Fatalf("Erro ao salvar store: %v", err)
+	}
+
+	// Recarregar do disco e verificar se persistiu no /etc/passwd
+	storeReloaded := NewUnixStore(tempDir)
+	if err := storeReloaded.Load(); err != nil {
+		t.Fatalf("Erro ao recarregar store: %v", err)
+	}
+
+	limit, exists := storeReloaded.GetUserLimit("user_limit")
+	if !exists {
+		t.Fatalf("user_limit não encontrado após reload")
+	}
+	if limit != 3 {
+		t.Errorf("Esperava limite 3, obteve %d", limit)
+	}
+
+	// Testar UpdateUserLimit
+	updated := storeReloaded.UpdateUserLimit("user_limit", 10)
+	if !updated {
+		t.Errorf("UpdateUserLimit retornou false para usuário existente")
+	}
+	_ = storeReloaded.Save()
+
+	storeReloaded2 := NewUnixStore(tempDir)
+	_ = storeReloaded2.Load()
+	limit2, _ := storeReloaded2.GetUserLimit("user_limit")
+	if limit2 != 10 {
+		t.Errorf("Esperava limite 10 após update, obteve %d", limit2)
+	}
+
+	// Testar UpdateUserLimit em usuário inexistente
+	if updatedNonExistent := storeReloaded2.UpdateUserLimit("nao_existe", 5); updatedNonExistent {
+		t.Errorf("UpdateUserLimit deveria retornar false para usuário inexistente")
+	}
+}
+
 

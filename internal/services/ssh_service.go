@@ -34,6 +34,11 @@ func (s *SSHService) SetStore(store *utils.UnixStore) {
 	s.store = store
 }
 
+// GetStore retorna o UnixStore utilizado pelo serviço
+func (s *SSHService) GetStore() *utils.UnixStore {
+	return s.store
+}
+
 // CreateUsers cria múltiplos usuários SSH em uma única transação atômica
 func (s *SSHService) CreateUsers(users []models.SSHUser) models.SSHUserCreateResponse {
 	if len(users) == 0 {
@@ -125,7 +130,7 @@ func (s *SSHService) CreateUsers(users []models.SSHUser) models.SSHUserCreateRes
 			expireDays = utils.DaysToShadowExpireDays(user.ValidateDays)
 		}
 
-		s.store.UpsertUser(user.Username, hash, 0, 0, expireDays, "/bin/false")
+		s.store.UpsertUser(user.Username, hash, 0, 0, expireDays, "/bin/false", user.Limit)
 
 		results[originalIndex] = models.SSHUserResponse{
 			Username: user.Username,
@@ -173,7 +178,7 @@ func (s *SSHService) CreateTestUser(request models.SSHUserTestRequest, cronServi
 	testUser := models.SSHUser{
 		Username:     request.Username,
 		Password:     request.Password,
-		Limit:        0,
+		Limit:        request.Limit,
 		ValidateDays: 4, // 4 dias como margem de segurança no shadow
 		IsTest:       true,
 		Time:         request.Time,
@@ -344,6 +349,65 @@ func (s *SSHService) UpdateValidate(username string, days int) models.SSHUserRes
 	}
 }
 
+// UpdateLimit atualiza o limite de conexões simultâneas de um usuário SSH no /etc/passwd
+func (s *SSHService) UpdateLimit(username string, limit int) models.SSHUserResponse {
+	if utils.IsReservedUsername(username) {
+		return models.SSHUserResponse{
+			Username: username,
+			Success:  false,
+			Message:  "Cannot modify reserved/system user",
+		}
+	}
+
+	unlock, err := s.store.Lock()
+	if err != nil {
+		return models.SSHUserResponse{
+			Username: username,
+			Success:  false,
+			Message:  fmt.Sprintf("Error locking system files: %v", err),
+		}
+	}
+	defer unlock()
+
+	if err := s.store.Load(); err != nil {
+		return models.SSHUserResponse{
+			Username: username,
+			Success:  false,
+			Message:  fmt.Sprintf("Error loading system files: %v", err),
+		}
+	}
+
+	if s.store.IsSystemUser(username) {
+		return models.SSHUserResponse{
+			Username: username,
+			Success:  false,
+			Message:  "Cannot modify reserved/system user",
+		}
+	}
+
+	if !s.store.UpdateUserLimit(username, limit) {
+		return models.SSHUserResponse{
+			Username: username,
+			Success:  false,
+			Message:  "User not found",
+		}
+	}
+
+	if err := s.store.Save(); err != nil {
+		return models.SSHUserResponse{
+			Username: username,
+			Success:  false,
+			Message:  fmt.Sprintf("Error saving system files: %v", err),
+		}
+	}
+
+	return models.SSHUserResponse{
+		Username: username,
+		Success:  true,
+		Message:  "Connection limit updated successfully",
+	}
+}
+
 // DeleteUsers deleta usuários SSH em lote com encerramento imediato de túneis
 func (s *SSHService) DeleteUsers(usernames []string) models.SSHUserCreateResponse {
 	if len(usernames) == 0 {
@@ -439,6 +503,13 @@ func (s *SSHService) DeleteUsers(usernames []string) models.SSHUserCreateRespons
 		}
 	}
 
+	// 6. Derrubar conexões ativas diretamente no proxy-server
+	actuallyDeleted := make([]string, 0, len(deletedSet))
+	for u := range deletedSet {
+		actuallyDeleted = append(actuallyDeleted, u)
+	}
+	utils.ProxyServerKillUsers(actuallyDeleted)
+
 	elapsed := time.Since(start)
 	log.Printf("✅ Deleção de %d usuários concluída em %s (%d removidos com sucesso)", len(usernames), elapsed, len(deletedUIDs))
 
@@ -513,6 +584,7 @@ func (s *SSHService) DisableUser(username string) models.SSHUserResponse {
 
 	// Matar túneis/sessões ativas
 	utils.TerminateUserSessions(username, uid)
+	_, _ = utils.ProxyServerKillUser(username)
 
 	return models.SSHUserResponse{
 		Username: username,
@@ -610,7 +682,7 @@ func (s *SSHService) DeleteAllUsers() models.SSHUserCreateResponse {
 
 	totalBefore := len(s.store.Passwd)
 
-	deletedUIDs, totalDeleted := s.store.DeleteAllNonSystemUsers()
+	deletedUsernames, deletedUIDs, totalDeleted := s.store.DeleteAllNonSystemUsers()
 	if totalDeleted == 0 {
 		return models.SSHUserCreateResponse{
 			Error:        false,
@@ -632,6 +704,7 @@ func (s *SSHService) DeleteAllUsers() models.SSHUserCreateResponse {
 
 	// Encerrar túneis/sessões de todos os UIDs em lote (chunks de 500)
 	utils.TerminateUserSessionsByUIDs(deletedUIDs)
+	utils.ProxyServerKillUsers(deletedUsernames)
 
 	_ = os.Remove("./data/ssh_user_expiration_backup.json")
 
@@ -694,6 +767,7 @@ func (s *SSHService) DeleteExpiredUsers() models.SSHUserCreateResponse {
 
 	// Encerrar túneis/sessões de todos os UIDs expirados em lote
 	utils.TerminateUserSessionsByUIDs(deletedUIDs)
+	utils.ProxyServerKillUsers(deletedUsernames)
 
 	// Limpar backups de expiração dos usuários deletados
 	_ = utils.RemoveExpirationBackups(deletedUsernames)

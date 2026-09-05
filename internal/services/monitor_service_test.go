@@ -5,6 +5,9 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
+
+	"api-v2/internal/models"
 )
 
 func TestMonitorService_V2RayNotInstalled(t *testing.T) {
@@ -402,5 +405,47 @@ client2:x:1002:1002::/home/client2:/usr/bin/false
 	if onlineRes.SSHUsers < 0 {
 		t.Errorf("Total SSH users não deve ser negativo")
 	}
+
+	// VTproxy não deve ser nulo
+	if res.VTproxy == nil {
+		t.Errorf("VTproxy em DetailedUsersResponse não deve ser nil")
+	}
 }
+
+func TestMonitorService_VTProxyFields(t *testing.T) {
+	monitor := NewMonitorService("")
+
+	// Simular usuários VTproxy no cache
+	monitor.mutex.Lock()
+	monitor.vtproxyUsers = 2
+	monitor.vtproxyUsersList = []models.VTProxyUserOnline{
+		{Username: "joao", Connections: 2, Count: 2},
+		{Username: "maria", Connections: 1, Count: 1},
+	}
+	monitor.cacheExpiry = time.Now().Add(1 * time.Hour) // não expirar cache
+	monitor.mutex.Unlock()
+
+	online := monitor.GetOnlineUsers()
+	if online.VTproxy != 2 {
+		t.Errorf("Esperava VTproxy = 2, obteve %d", online.VTproxy)
+	}
+	if online.VTProxyUsers != 2 {
+		t.Errorf("Esperava VTProxyUsers = 2, obteve %d", online.VTProxyUsers)
+	}
+
+	detailed := monitor.GetDetailedOnlineUsers()
+	if len(detailed.VTproxy) != 2 {
+		t.Fatalf("Esperava 2 usuários em VTproxy, obteve %d", len(detailed.VTproxy))
+	}
+	if detailed.TotalVTProxy != 2 {
+		t.Errorf("Esperava TotalVTProxy = 2, obteve %d", detailed.TotalVTProxy)
+	}
+	if detailed.VTproxy[0].Username != "joao" || detailed.VTproxy[0].Connections != 2 {
+		t.Errorf("Dados incorretos em VTproxy[0]: %+v", detailed.VTproxy[0])
+	}
+	if detailed.VTproxy[1].Username != "maria" || detailed.VTproxy[1].Connections != 1 {
+		t.Errorf("Dados incorretos em VTproxy[1]: %+v", detailed.VTproxy[1])
+	}
+}
+
 

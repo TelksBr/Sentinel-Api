@@ -278,12 +278,59 @@ func (s *UnixStore) IsSystemUser(username string) bool {
 	return false
 }
 
+// FormatLimitGECOS formata o limite de conexões para o campo GECOS do /etc/passwd.
+// Exemplo: 2 -> "limit=2", 0 -> "limit=0".
+func FormatLimitGECOS(limit int) string {
+	if limit < 0 {
+		limit = 0
+	}
+	return fmt.Sprintf("limit=%d", limit)
+}
+
+// ParseLimitGECOS extrai o limite de conexões a partir do campo GECOS.
+// Suporta formatos como "limit=2", "2", ou campos delimitados por vírgula como "Nome,limit=2".
+// Retorna 0 (ilimitado) caso o campo esteja vazio ou não contenha um limite válido.
+func ParseLimitGECOS(gecos string) int {
+	gecos = strings.TrimSpace(gecos)
+	if gecos == "" {
+		return 0
+	}
+
+	// Se houver subcampos separados por vírgula (formato padrão GECOS)
+	fields := strings.Split(gecos, ",")
+	for _, f := range fields {
+		f = strings.TrimSpace(f)
+		if strings.HasPrefix(f, "limit=") {
+			valStr := strings.TrimPrefix(f, "limit=")
+			if val, err := strconv.Atoi(valStr); err == nil && val >= 0 {
+				return val
+			}
+		}
+	}
+
+	// Caso seja diretamente "limit=N"
+	if strings.HasPrefix(gecos, "limit=") {
+		valStr := strings.TrimPrefix(gecos, "limit=")
+		if val, err := strconv.Atoi(valStr); err == nil && val >= 0 {
+			return val
+		}
+	}
+
+	// Caso seja apenas um número puro "N"
+	if val, err := strconv.Atoi(gecos); err == nil && val >= 0 {
+		return val
+	}
+
+	return 0
+}
+
 // UpsertUser insere ou atualiza um usuário SSH nas tabelas do Unix.
-func (s *UnixStore) UpsertUser(username, passwordHash string, uid, gid int, expireDays string, shell string) (isNew bool) {
+func (s *UnixStore) UpsertUser(username, passwordHash string, uid, gid int, expireDays string, shell string, limit int) (isNew bool) {
 	todayEpochDays := strconv.FormatInt(time.Now().Unix()/86400, 10)
 	if shell == "" {
 		shell = "/bin/false"
 	}
+	gecos := FormatLimitGECOS(limit)
 
 	// Verificar se usuário já existe
 	pIdx, pExists := s.passwdMap[username]
@@ -292,6 +339,7 @@ func (s *UnixStore) UpsertUser(username, passwordHash string, uid, gid int, expi
 	if pExists && sExists {
 		// Atualizar existente
 		s.Passwd[pIdx].Shell = shell
+		s.Passwd[pIdx].GECOS = gecos
 		s.Shadow[sIdx].PasswordHash = passwordHash
 		s.Shadow[sIdx].LastChanged = todayEpochDays
 		s.Shadow[sIdx].ExpireDays = expireDays
@@ -312,7 +360,7 @@ func (s *UnixStore) UpsertUser(username, passwordHash string, uid, gid int, expi
 		Password: "x",
 		UID:      uid,
 		GID:      gid,
-		GECOS:    "",
+		GECOS:    gecos,
 		Home:     "/nonexistent",
 		Shell:    shell,
 	}
@@ -367,6 +415,26 @@ func (s *UnixStore) UpsertUser(username, passwordHash string, uid, gid int, expi
 	}
 
 	return true
+}
+
+// UpdateUserLimit atualiza o limite no campo GECOS de um usuário existente.
+func (s *UnixStore) UpdateUserLimit(username string, limit int) bool {
+	pIdx, pExists := s.passwdMap[username]
+	if !pExists {
+		return false
+	}
+	s.Passwd[pIdx].GECOS = FormatLimitGECOS(limit)
+	return true
+}
+
+// GetUserLimit obtém o limite de conexões configurado no GECOS do usuário.
+// Retorna o limite e se o usuário foi encontrado.
+func (s *UnixStore) GetUserLimit(username string) (int, bool) {
+	pIdx, pExists := s.passwdMap[username]
+	if !pExists {
+		return 0, false
+	}
+	return ParseLimitGECOS(s.Passwd[pIdx].GECOS), true
 }
 
 // DeleteUser remove um único usuário se não for usuário do sistema.
@@ -500,7 +568,7 @@ func (s *UnixStore) getUIDFromShadow(username string) int {
 
 // DeleteAllNonSystemUsers remove todos os usuários SSH com shell /bin/false ou /usr/sbin/nologin (UID >= 1000 e não reservados).
 // Usuários com /bin/bash, /bin/sh, /bin/zsh ou outros shells interativos NUNCA são deletados.
-func (s *UnixStore) DeleteAllNonSystemUsers() (deletedUIDs []int, totalDeleted int) {
+func (s *UnixStore) DeleteAllNonSystemUsers() (deletedUsernames []string, deletedUIDs []int, totalDeleted int) {
 	// Identificar sistema primeiro
 	systemUsersSet := make(map[string]bool, len(s.Passwd))
 	for _, p := range s.Passwd {
@@ -514,6 +582,7 @@ func (s *UnixStore) DeleteAllNonSystemUsers() (deletedUIDs []int, totalDeleted i
 		// Deletar apenas se UID >= 1000, não reservado e com shell /bin/false ou /usr/sbin/nologin
 		if p.UID >= 1000 && !IsReservedUsername(p.Username) && (p.Shell == "/bin/false" || p.Shell == "/usr/sbin/nologin") {
 			deletedUIDs = append(deletedUIDs, p.UID)
+			deletedUsernames = append(deletedUsernames, p.Username)
 		} else {
 			filteredPasswd = append(filteredPasswd, p)
 		}
@@ -556,7 +625,7 @@ func (s *UnixStore) DeleteAllNonSystemUsers() (deletedUIDs []int, totalDeleted i
 	s.GShadow = filteredGShadow
 
 	s.rebuildMaps()
-	return deletedUIDs, len(deletedUIDs)
+	return deletedUsernames, deletedUIDs, len(deletedUIDs)
 }
 
 // DeleteExpiredUsers remove todos os usuários SSH não-sistema cuja data de expiração no shadow já passou (ExpireDays <= hoje).

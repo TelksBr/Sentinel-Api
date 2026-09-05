@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"api-v2/internal/cron"
@@ -57,6 +58,8 @@ expired_user:!::
 	r := gin.New()
 	ssh := r.Group("/ssh_user")
 	{
+		ssh.PUT("/:username", sshHandlers.UpdateUser)
+		ssh.POST("/test", sshHandlers.CreateTestUser)
 		ssh.POST("/delete_expired", sshHandlers.DeleteExpiredUsers)
 		ssh.POST("/delete_all", sshHandlers.DeleteAllUsers)
 	}
@@ -100,3 +103,88 @@ func TestSSHHandlers_DeleteExpiredUsers(t *testing.T) {
 		t.Errorf("Detalhes da resposta inesperados: %v", resp.Details)
 	}
 }
+
+func TestSSHHandlers_UpdateUserLimit(t *testing.T) {
+	router, sshService, cleanup := setupTestRouter(t)
+	defer cleanup()
+
+	// 1. Atualizar limite de expired_user para 4
+	payload := `{"limit": 4}`
+	req, _ := http.NewRequest(http.MethodPut, "/ssh_user/expired_user", strings.NewReader(payload))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("Esperava status 200 OK, obteve %d: %s", w.Code, w.Body.String())
+	}
+
+	var resp models.SSHUserResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("Erro ao desserializar resposta JSON: %v", err)
+	}
+
+	if !resp.Success {
+		t.Errorf("Esperava resp.Success == true, obteve false: %s", resp.Message)
+	}
+
+	// 2. Verificar se o limite foi persistido no store
+	limit, exists := sshService.GetStore().GetUserLimit("expired_user")
+	if !exists || limit != 4 {
+		t.Errorf("Esperava limite 4 no store, obteve %d (exists=%v)", limit, exists)
+	}
+
+	// 3. Testar limite inválido (< 0)
+	reqBad, _ := http.NewRequest(http.MethodPut, "/ssh_user/expired_user", strings.NewReader(`{"limit": -1}`))
+	reqBad.Header.Set("Content-Type", "application/json")
+	wBad := httptest.NewRecorder()
+	router.ServeHTTP(wBad, reqBad)
+
+	if wBad.Code != http.StatusBadRequest {
+		t.Errorf("Esperava status 400 Bad Request para limite negativo, obteve %d", wBad.Code)
+	}
+}
+
+func TestSSHHandlers_CreateTestUserWithLimit(t *testing.T) {
+	router, sshService, cleanup := setupTestRouter(t)
+	defer cleanup()
+
+	// 1. Criar usuário de teste com limite 2
+	payload := `{"username": "testlimituser", "password": "senhaForte123", "time": 2, "limit": 2}`
+	req, _ := http.NewRequest(http.MethodPost, "/ssh_user/test", strings.NewReader(payload))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("Esperava status 200 OK, obteve %d: %s", w.Code, w.Body.String())
+	}
+
+	var resp models.SSHUserCreateResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("Erro ao desserializar resposta JSON: %v", err)
+	}
+
+	if resp.Error || len(resp.Details) != 1 || !resp.Details[0].Success {
+		t.Fatalf("Erro ao criar usuário de teste: %v", resp)
+	}
+
+	// 2. Verificar se o limite 2 foi persistido no store
+	limit, exists := sshService.GetStore().GetUserLimit("testlimituser")
+	if !exists || limit != 2 {
+		t.Errorf("Esperava limite 2 no store para testlimituser, obteve %d (exists=%v)", limit, exists)
+	}
+
+	// 3. Testar limite inválido (< 0) na rota de teste
+	badPayload := `{"username": "badtestuser", "password": "senhaForte123", "time": 2, "limit": -1}`
+	reqBad, _ := http.NewRequest(http.MethodPost, "/ssh_user/test", strings.NewReader(badPayload))
+	reqBad.Header.Set("Content-Type", "application/json")
+	wBad := httptest.NewRecorder()
+	router.ServeHTTP(wBad, reqBad)
+
+	if wBad.Code != http.StatusBadRequest {
+		t.Errorf("Esperava status 400 Bad Request para limite negativo no teste, obteve %d", wBad.Code)
+	}
+}
+
+

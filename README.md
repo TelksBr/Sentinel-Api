@@ -140,7 +140,7 @@ Retorna apenas o número da versão da API.
 
 #### `GET /onlines`
 
-Retorna contadores de usuários SSH, V2Ray e DT-Proto online. Dados em cache com polling em background (SSH: 2min, V2Ray: 90s, DT-Proto: 1min).
+Retorna contadores de usuários SSH, V2Ray, DT-Proto e VTproxy online. Dados em cache com polling em background.
 
 **Autenticação:** Não
 
@@ -150,7 +150,8 @@ Retorna contadores de usuários SSH, V2Ray e DT-Proto online. Dados em cache com
   "ssh_users": 5,
   "v2ray_users": 12,
   "dt_proto_users": 8,
-  "total_users": 25
+  "VTproxy": 3,
+  "total_users": 28
 }
 ```
 
@@ -158,7 +159,7 @@ Retorna contadores de usuários SSH, V2Ray e DT-Proto online. Dados em cache com
 
 #### `GET /users/online`
 
-Retorna lista detalhada de usuários online com identificadores.
+Retorna lista detalhada de usuários online com identificadores e contagens ativas do VTproxy (`/usr/local/bin/proxy-server --onlines-json`).
 
 **Autenticação:** Sim
 
@@ -179,10 +180,15 @@ Retorna lista detalhada de usuários online com identificadores.
     { "id": "user123" },
     { "id": "user456" }
   ],
+  "VTproxy": [
+    { "username": "joao", "connections": 2 },
+    { "username": "maria", "connections": 1 }
+  ],
   "total_ssh": 1,
   "total_v2ray": 1,
   "total_dt_proto": 2,
-  "total_users": 4
+  "total_vtproxy": 2,
+  "total_users": 6
 }
 ```
 
@@ -296,14 +302,16 @@ Cria um usuário SSH temporário com remoção automática agendada.
 |-------|------|-------------|-----------|-----------|
 | `username` | string | Sim | 3-32 chars, alfanumérico | Nome do usuário |
 | `password` | string | Sim | min 4 chars | Senha |
-| `time` | int | Sim | min 1 | Horas até remoção automática (máx 72) |
+| `time` | int | Sim | min 1, máx 72 | Horas até remoção automática |
+| `limit` | int | Não | min 0 | Limite de conexões (0 = ilimitado, padrão 0) |
 
 **Request:**
 ```json
 {
   "username": "teste1",
   "password": "senha123456",
-  "time": 2
+  "time": 2,
+  "limit": 1
 }
 ```
 
@@ -322,7 +330,9 @@ Cria um usuário SSH temporário com remoção automática agendada.
 
 #### `PUT /ssh_user/:username`
 
-Atualiza senha e/ou validade de um usuário SSH. Aceita ambos os campos na mesma requisição.
+Atualiza senha, validade e/ou limite de conexões simultâneas de um usuário SSH. Aceita qualquer combinação dos campos na mesma requisição.
+
+> O limite é persistido diretamente no campo **GECOS** do `/etc/passwd` no formato `limit=N` (ex: `limit=2`), permitindo que proxies e aplicações leiam a restrição de conexões sem necessidade de privilégios de root.
 
 **Autenticação:** Sim
 
@@ -334,30 +344,36 @@ Atualiza senha e/ou validade de um usuário SSH. Aceita ambos os campos na mesma
 |-------|------|-------------|-----------|-----------|
 | `password` | string | Não | min 4 chars | Nova senha |
 | `validate` | int | Não | min 1 | Novos dias de validade |
+| `limit` | int | Não | min 0 | Limite de conexões simultâneas (0 = ilimitado) |
 
-> Envie um ou ambos. Se ambos forem enviados, a API executa as duas operações e retorna array de resultados.
+> Envie um ou múltiplos campos. Se mais de um for enviado, a API executa as operações e retorna o array de resultados.
 
-**Request (apenas senha):**
+**Request (apenas limite):**
 ```json
-{ "password": "nova_senha123" }
+{ "limit": 2 }
 ```
 
 **Resposta `200`:**
 ```json
-{ "username": "usuario1", "success": true, "message": "Password updated successfully" }
+{ "username": "usuario1", "success": true, "message": "Connection limit updated successfully" }
 ```
 
-**Request (ambos):**
+**Request (senha, validade e limite):**
 ```json
-{ "password": "nova_senha123", "validate": 90 }
+{ "password": "nova_senha123", "validate": 90, "limit": 3 }
 ```
 
 **Resposta `200`:**
 ```json
-[
-  { "username": "usuario1", "success": true, "message": "Password updated successfully" },
-  { "username": "usuario1", "success": true, "message": "Expiration date updated successfully" }
-]
+{
+  "username": "usuario1",
+  "success": true,
+  "details": [
+    { "username": "usuario1", "success": true, "message": "Password updated successfully" },
+    { "username": "usuario1", "success": true, "message": "Expiration date updated successfully" },
+    { "username": "usuario1", "success": true, "message": "Connection limit updated successfully" }
+  ]
+}
 ```
 
 ---

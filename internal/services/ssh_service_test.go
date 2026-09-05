@@ -143,7 +143,7 @@ func TestSSHService_DeleteBatchAndAll(t *testing.T) {
 	}
 
 	// Adicionar um usuário com /bin/bash (ex: conta administrativa humana)
-	service.store.UpsertUser("admin_humano", "$6$hash", 1005, 1005, "", "/bin/bash")
+	service.store.UpsertUser("admin_humano", "$6$hash", 1005, 1005, "", "/bin/bash", 0)
 	_ = service.store.Save()
 
 	// Deletar todos restantes (/bin/false e /usr/sbin/nologin)
@@ -272,4 +272,79 @@ func TestSSHService_DeleteExpiredUsers(t *testing.T) {
 		t.Errorf("existing1 não deveria mais existir no passwd")
 	}
 }
+
+func TestSSHService_UpdateLimit(t *testing.T) {
+	service, cleanup := setupTestSSHService(t)
+	defer cleanup()
+
+	// Criar usuário com limit 2
+	respCreate := service.CreateUsers([]models.SSHUser{
+		{
+			Username:     "limit_user",
+			Password:     "senhaForte123",
+			ValidateDays: 30,
+			Limit:        2,
+		},
+	})
+	if respCreate.Error || len(respCreate.Details) != 1 || !respCreate.Details[0].Success {
+		t.Fatalf("Erro ao criar usuário com limite: %v", respCreate)
+	}
+
+	// Verificar se limite 2 foi persistido no store
+	_ = service.store.Load()
+	limit, exists := service.store.GetUserLimit("limit_user")
+	if !exists || limit != 2 {
+		t.Errorf("Esperava limite 2, obteve %d (exists=%v)", limit, exists)
+	}
+
+	// Atualizar limite para 5
+	respUpdate := service.UpdateLimit("limit_user", 5)
+	if !respUpdate.Success {
+		t.Fatalf("Falha ao atualizar limite: %s", respUpdate.Message)
+	}
+
+	// Verificar persistência
+	_ = service.store.Load()
+	limitUpdated, existsUpdated := service.store.GetUserLimit("limit_user")
+	if !existsUpdated || limitUpdated != 5 {
+		t.Errorf("Esperava limite 5 após update, obteve %d (exists=%v)", limitUpdated, existsUpdated)
+	}
+
+	// Tentar atualizar usuário do sistema ou reservado (deve falhar)
+	respSys := service.UpdateLimit("root", 10)
+	if respSys.Success {
+		t.Errorf("UpdateLimit em usuário root deveria ter falhado")
+	}
+
+	// Tentar atualizar usuário inexistente (deve falhar)
+	respNotFound := service.UpdateLimit("nao_existe_mesmo", 10)
+	if respNotFound.Success {
+		t.Errorf("UpdateLimit em usuário inexistente deveria ter falhado")
+	}
+}
+
+func TestSSHService_CreateTestUserWithLimit(t *testing.T) {
+	service, cleanup := setupTestSSHService(t)
+	defer cleanup()
+
+	mockCron := &mockCronScheduler{}
+	resp := service.CreateTestUser(models.SSHUserTestRequest{
+		Username: "test_user_limit",
+		Password: "senhaTeste123",
+		Time:     2,
+		Limit:    3,
+	}, mockCron)
+
+	if resp.Error || len(resp.Details) != 1 || !resp.Details[0].Success {
+		t.Fatalf("Erro ao criar usuário teste com limite: %v", resp)
+	}
+
+	_ = service.store.Load()
+	limit, exists := service.store.GetUserLimit("test_user_limit")
+	if !exists || limit != 3 {
+		t.Errorf("Esperava limite 3 no usuário teste, obteve %d (exists=%v)", limit, exists)
+	}
+}
+
+
 
