@@ -8,7 +8,6 @@ type OnlineUsersResponse struct {
 	V2RayUsers   int `json:"v2ray_users"`
 	DTProtoUsers int `json:"dt_proto_users"`
 	VTproxy      int `json:"VTproxy"`
-	VTProxyUsers int `json:"vtproxy_users,omitempty"`
 	TotalUsers   int `json:"total_users"`
 }
 
@@ -19,7 +18,6 @@ func NewOnlineUsersResponse(sshUsers, v2rayUsers, dtProtoUsers, vtproxyUsers int
 		V2RayUsers:   v2rayUsers,
 		DTProtoUsers: dtProtoUsers,
 		VTproxy:      vtproxyUsers,
-		VTProxyUsers: vtproxyUsers,
 		TotalUsers:   sshUsers + v2rayUsers + dtProtoUsers + vtproxyUsers,
 	}
 }
@@ -45,7 +43,6 @@ type DTProtoUserOnline struct {
 type VTProxyUserOnline struct {
 	Username    string `json:"username"`
 	Connections int    `json:"connections"`
-	Count       int    `json:"count,omitempty"`
 }
 
 // DetailedUsersResponse representa a resposta detalhada de usuários online
@@ -54,7 +51,6 @@ type DetailedUsersResponse struct {
 	V2RayUsers   []V2RayUserOnline   `json:"v2ray_users"`
 	DTProtoUsers []DTProtoUserOnline `json:"dt_proto_users"`
 	VTproxy      []VTProxyUserOnline `json:"VTproxy"`
-	VTProxyUsers []VTProxyUserOnline `json:"vtproxy_users,omitempty"`
 	TotalSSH     int                 `json:"total_ssh"`
 	TotalV2Ray   int                 `json:"total_v2ray"`
 	TotalDTProto int                 `json:"total_dt_proto"`
@@ -69,7 +65,6 @@ func NewDetailedUsersResponse(sshUsers []SSHUserOnline, v2rayUsers []V2RayUserOn
 		V2RayUsers:   v2rayUsers,
 		DTProtoUsers: dtProtoUsers,
 		VTproxy:      vtproxyUsers,
-		VTProxyUsers: vtproxyUsers,
 		TotalSSH:     len(sshUsers),
 		TotalV2Ray:   len(v2rayUsers),
 		TotalDTProto: len(dtProtoUsers),

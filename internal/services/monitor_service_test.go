@@ -419,8 +419,8 @@ func TestMonitorService_VTProxyFields(t *testing.T) {
 	monitor.mutex.Lock()
 	monitor.vtproxyUsers = 2
 	monitor.vtproxyUsersList = []models.VTProxyUserOnline{
-		{Username: "joao", Connections: 2, Count: 2},
-		{Username: "maria", Connections: 1, Count: 1},
+		{Username: "joao", Connections: 2},
+		{Username: "maria", Connections: 1},
 	}
 	monitor.cacheExpiry = time.Now().Add(1 * time.Hour) // não expirar cache
 	monitor.mutex.Unlock()
@@ -428,9 +428,6 @@ func TestMonitorService_VTProxyFields(t *testing.T) {
 	online := monitor.GetOnlineUsers()
 	if online.VTproxy != 2 {
 		t.Errorf("Esperava VTproxy = 2, obteve %d", online.VTproxy)
-	}
-	if online.VTProxyUsers != 2 {
-		t.Errorf("Esperava VTProxyUsers = 2, obteve %d", online.VTProxyUsers)
 	}
 
 	detailed := monitor.GetDetailedOnlineUsers()

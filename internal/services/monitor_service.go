@@ -956,7 +956,6 @@ func (m *MonitorService) updateVTProxyUsers() {
 		vtproxyUsersList = append(vtproxyUsersList, models.VTProxyUserOnline{
 			Username:    username,
 			Connections: count,
-			Count:       count,
 		})
 	}
 
