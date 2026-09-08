@@ -71,6 +71,44 @@ func TestCronjobService_RemovePendingJobs(t *testing.T) {
 	}
 }
 
+func TestCronjobService_AddTestCronjobReplacesPending(t *testing.T) {
+	cs, cronFile, cleanup := setupTestCronService(t)
+	defer cleanup()
+
+	if err := cs.AddTestCronjob("user1", "ssh", 1); err != nil {
+		t.Fatalf("primeiro AddTestCronjob: %v", err)
+	}
+	if err := cs.AddTestCronjob("user1", "ssh", 3); err != nil {
+		t.Fatalf("segundo AddTestCronjob: %v", err)
+	}
+
+	jobs, err := cs.loadCronjobs()
+	if err != nil {
+		t.Fatalf("loadCronjobs: %v", err)
+	}
+
+	pending := 0
+	var last Cronjob
+	for _, job := range jobs {
+		if job.ID == "user1" && job.Type == "ssh" && !job.Executed {
+			pending++
+			last = job
+		}
+	}
+	if pending != 1 {
+		t.Fatalf("esperava 1 job pendente após renovar teste, obteve %d (ficheiro=%s)", pending, cronFile)
+	}
+
+	execTime, err := time.Parse(time.RFC3339, last.ExecTime)
+	if err != nil {
+		t.Fatalf("execTime inválido: %v", err)
+	}
+	until := time.Until(execTime)
+	if until < 2*time.Hour || until > 4*time.Hour {
+		t.Errorf("execTime deveria estar ~3h no futuro, falta %s", until)
+	}
+}
+
 func TestCronjobService_ExecuteExpiredSSHUsers(t *testing.T) {
 	cs, _, cleanup := setupTestCronService(t)
 	defer cleanup()
@@ -78,4 +116,3 @@ func TestCronjobService_ExecuteExpiredSSHUsers(t *testing.T) {
 	// Chamar executeExpiredSSHUsers diretamente para garantir que não ocorra pânico
 	cs.executeExpiredSSHUsers()
 }
-

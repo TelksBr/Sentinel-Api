@@ -121,7 +121,7 @@ func (cs *CronjobService) AddTestCronjob(id, cronType string, hoursFromNow int) 
 		Executed: false,
 	}
 
-	return cs.addCronjob(cronjob)
+	return cs.upsertCronjob(cronjob)
 }
 
 // AddV2RayCronjob adiciona um cronjob para usuário V2Ray
@@ -361,6 +361,38 @@ func (cs *CronjobService) addCronjob(cronjob Cronjob) error {
 	return cs.saveCronjobs(cronjobs)
 }
 
+// upsertCronjob substitui jobs pendentes do mesmo ID+tipo e grava o novo horário.
+func (cs *CronjobService) upsertCronjob(cronjob Cronjob) error {
+	unlock, err := cs.lockCronjobStore()
+	if err != nil {
+		return err
+	}
+	defer unlock()
+
+	cronjobs, err := cs.loadCronjobs()
+	if err != nil {
+		return err
+	}
+
+	replaced := 0
+	filtered := make([]Cronjob, 0, len(cronjobs)+1)
+	for _, job := range cronjobs {
+		if job.ID == cronjob.ID && job.Type == cronjob.Type && !job.Executed {
+			replaced++
+			continue
+		}
+		filtered = append(filtered, job)
+	}
+	filtered = append(filtered, cronjob)
+
+	if replaced > 0 {
+		log.Printf("⏰ Cronjob de teste atualizado: %s (%s) — %d pendente(s) substituído(s), novo execTime=%s",
+			cronjob.ID, cronjob.Type, replaced, cronjob.ExecTime)
+	}
+
+	return cs.saveCronjobs(filtered)
+}
+
 // loadCronjobs carrega cronjobs do arquivo JSON
 func (cs *CronjobService) loadCronjobs() ([]Cronjob, error) {
 	data, err := os.ReadFile(cronjobFilePath())
@@ -407,4 +439,3 @@ func (cs *CronjobService) cleanExecutedCronjobs() {
 		log.Printf("Erro ao salvar cronjobs após limpeza: %v", err)
 	}
 }
-
