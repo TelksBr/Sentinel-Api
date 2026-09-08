@@ -196,3 +196,46 @@ func TestEnsureLogFileAccessible(t *testing.T) {
 	}
 }
 
+func TestIsDedicatedXrayLogDir(t *testing.T) {
+	if !isDedicatedXrayLogDir("/var/log/v2ray") {
+		t.Errorf("esperava /var/log/v2ray como diretório dedicado")
+	}
+	if !isDedicatedXrayLogDir("/var/log/xray") {
+		t.Errorf("esperava /var/log/xray como diretório dedicado")
+	}
+	if isDedicatedXrayLogDir("/var/log") {
+		t.Errorf("não deve tratar /var/log como diretório dedicado")
+	}
+}
+
+func TestReplaceLogFileAtomic(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "log_replace_test_*")
+	if err != nil {
+		t.Fatalf("Erro ao criar tempDir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	dest := filepath.Join(tempDir, "access.log")
+	if err := os.WriteFile(dest, []byte("old\n"), 0644); err != nil {
+		t.Fatalf("erro ao criar dest: %v", err)
+	}
+	tmp := dest + ".tmp"
+	if err := os.WriteFile(tmp, []byte("new\n"), 0666); err != nil {
+		t.Fatalf("erro ao criar tmp: %v", err)
+	}
+
+	if err := ReplaceLogFileAtomic(dest, tmp); err != nil {
+		t.Fatalf("ReplaceLogFileAtomic falhou: %v", err)
+	}
+
+	data, err := os.ReadFile(dest)
+	if err != nil {
+		t.Fatalf("dest não existe após replace: %v", err)
+	}
+	if string(data) != "new\n" {
+		t.Errorf("conteúdo inesperado: %q", string(data))
+	}
+	if _, err := os.Stat(tmp); !os.IsNotExist(err) {
+		t.Errorf("tmp deveria ter sido renomeado/removido")
+	}
+}

@@ -110,6 +110,11 @@ func (m *MonitorService) Start() {
 		log.Println("ℹ️ V2Ray/Xray não detectado no servidor (monitoramento de V2Ray pausado aguardando instalação).")
 	}
 
+	// Garantir pasta/dono em todos os access.log conhecidos (incl. /var/log/v2ray)
+	// e logrotate que não recria o ficheiro como root:640.
+	utils.EnsureCommonXrayLogPaths(append(m.v2rayLogPaths, m.currentLogPath)...)
+	utils.EnsureXrayLogrotateSafe()
+
 	// Verificar e otimizar logs excessivamente grandes no arranque para evitar OOM e poupar disco
 	m.checkAndOptimizeLogFiles()
 
@@ -698,15 +703,11 @@ func (m *MonitorService) safeTrimLargeLogFile(filePath string, maxBytes int64, k
 		log.Printf("❌ Erro ao escrever arquivo temporário de limpeza: %v", err)
 		return false
 	}
-	_ = os.Chmod(tmpPath, 0666)
 
-	if err := os.Rename(tmpPath, filePath); err != nil {
+	if err := utils.ReplaceLogFileAtomic(filePath, tmpPath); err != nil {
 		log.Printf("❌ Erro ao substituir log reduzido: %v", err)
-		_ = os.Remove(tmpPath)
 		return false
 	}
-
-	_ = utils.EnsureLogFileAccessible(filePath)
 
 	log.Printf("✅ Log %s otimizado com sucesso!", filePath)
 	return true
@@ -1058,21 +1059,17 @@ func (m *MonitorService) performV2RayLogCleanup() {
 		}
 	}
 
-	// Ficheiro tmp único por PID (evita corrida entre processos no mesmo .tmp)
+	// Ficheiro tmp único por PID; replace preserva dono do Xray (nobody) sem janela root:644
 	tmpPath := fmt.Sprintf("%s.cleanup.%d.tmp", m.currentLogPath, os.Getpid())
 	if err := os.WriteFile(tmpPath, []byte(strings.Join(newLogContent, "\n")), 0666); err != nil {
 		log.Printf("❌ Erro ao escrever tmp de limpeza: %v", err)
 		return
 	}
-	_ = os.Chmod(tmpPath, 0666)
 
-	if err := os.Rename(tmpPath, m.currentLogPath); err != nil {
+	if err := utils.ReplaceLogFileAtomic(m.currentLogPath, tmpPath); err != nil {
 		log.Printf("❌ Erro ao renomear arquivo de log após limpeza: %v", err)
-		os.Remove(tmpPath)
 		return
 	}
-
-	_ = utils.EnsureLogFileAccessible(m.currentLogPath)
 
 	log.Printf("✅ Limpeza de logs V2Ray concluída: %d linhas removidas, %d mantidas", removed, kept)
 }
