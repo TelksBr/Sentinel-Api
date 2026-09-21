@@ -65,9 +65,25 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Detectar e inicializar banco SQLite (xraycore.db) condicionalmente
+	dbPath := services.DetectXrayDBPath("")
+	var xrayDB *services.XrayDB
+	if dbPath != "" {
+		var err error
+		xrayDB, err = services.NewXrayDB(dbPath)
+		if err != nil {
+			log.Printf("⚠️ Erro ao abrir banco SQLite '%s': %v (operando sem SQLite)", dbPath, err)
+		} else {
+			xrayDB.LogStatus()
+			defer xrayDB.Close()
+		}
+	} else {
+		log.Println("ℹ️ Banco SQLite (xraycore.db) não encontrado. Sincronização SQLite desativada.")
+	}
+
 	// Inicializar serviços
 	sshService := services.NewSSHService()
-	v2rayService := services.NewV2RayService()
+	v2rayService := services.NewV2RayService(xrayDB)
 	monitorService := services.NewMonitorService(v2rayService.GetConfigPath())
 
 	// Inicializar sistema de cronjobs

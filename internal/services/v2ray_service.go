@@ -21,13 +21,28 @@ import (
 // V2RayService implementa os serviços V2Ray
 type V2RayService struct {
 	mutex       sync.Mutex
-	serviceName string // Cache do nome do serviço detectado
-	configPath  string // Cache do caminho do config.json detectado
+	serviceName string  // Cache do nome do serviço detectado
+	configPath  string  // Cache do caminho do config.json detectado
+	xrayDB      *XrayDB // Referência para o banco SQLite xraycore.db (se ativo)
 }
 
 // NewV2RayService cria uma nova instância do serviço V2Ray
-func NewV2RayService() *V2RayService {
-	return &V2RayService{}
+func NewV2RayService(xrayDB ...*XrayDB) *V2RayService {
+	s := &V2RayService{}
+	if len(xrayDB) > 0 {
+		s.xrayDB = xrayDB[0]
+	}
+	return s
+}
+
+// SetXrayDB define ou altera a referência do banco SQLite
+func (s *V2RayService) SetXrayDB(db *XrayDB) {
+	s.xrayDB = db
+}
+
+// GetXrayDB retorna a referência do banco SQLite
+func (s *V2RayService) GetXrayDB() *XrayDB {
+	return s.xrayDB
 }
 
 // lockConfigWrite bloqueia via mutex em memória do serviço
@@ -60,8 +75,31 @@ func (s *V2RayService) CreateUsers(users []models.V2RayUser) models.V2RayUserCre
 
 	// Processar cada usuário
 	createdUsers := []models.V2RayUserResponse{}
+	xrayClients := make([]models.XrayClient, 0, len(users))
+
 	for _, user := range users {
 		email := user.GenerateEmail()
+		if user.Email != nil && *user.Email != "" {
+			email = *user.Email
+		}
+		name := email
+		if user.Name != nil && *user.Name != "" {
+			name = *user.Name
+		}
+		inboundTag := "inbound-sshplus"
+		if user.InboundTag != nil && *user.InboundTag != "" {
+			inboundTag = *user.InboundTag
+		}
+		maxConns := 1
+		if user.MaxConns != nil && *user.MaxConns > 0 {
+			maxConns = *user.MaxConns
+		}
+
+		var expiresAt int64
+		if expTime, err := time.Parse(time.RFC3339, user.ExpirationDate); err == nil {
+			expiresAt = expTime.Unix()
+		}
+
 		createdUser := models.V2RayUserResponse{
 			UUID:           user.UUID,
 			Email:          email,
@@ -71,6 +109,16 @@ func (s *V2RayService) CreateUsers(users []models.V2RayUser) models.V2RayUserCre
 		}
 		createdUsers = append(createdUsers, createdUser)
 		s.upsertClientInAllInbounds(cfg, user.UUID, email, user.ExpirationDate)
+
+		xrayClients = append(xrayClients, models.XrayClient{
+			UUID:        user.UUID,
+			Name:        name,
+			Email:       email,
+			InboundTag:  inboundTag,
+			ExpiresAt:   expiresAt,
+			MaxConns:    maxConns,
+			QuotaAction: "block",
+		})
 	}
 
 	// Salvar configuração
@@ -78,6 +126,13 @@ func (s *V2RayService) CreateUsers(users []models.V2RayUser) models.V2RayUserCre
 		return models.V2RayUserCreateResponse{
 			Error:   true,
 			Message: fmt.Sprintf("Erro ao salvar configuração: %v", err),
+		}
+	}
+
+	// Sincronizar criação no SQLite se ativo
+	if s.xrayDB != nil && s.xrayDB.IsEnabled() && len(xrayClients) > 0 {
+		if err := s.xrayDB.BatchUpsertClients(xrayClients); err != nil {
+			utils.WriteLog(fmt.Sprintf("⚠️ Erro ao persistir clientes no SQLite xraycore.db: %v", err))
 		}
 	}
 
@@ -149,6 +204,17 @@ func (s *V2RayService) DeleteUsers(uuids []string) models.V2RayUserCreateRespons
 			Error:      true,
 			Message:    fmt.Sprintf("Erro ao salvar configuração: %v", err),
 			NotDeleted: notDeleted,
+		}
+	}
+
+	// Sincronizar deleção no SQLite se ativo
+	if s.xrayDB != nil && s.xrayDB.IsEnabled() && len(deletedUsers) > 0 {
+		deletedUUIDs := make([]string, 0, len(deletedUsers))
+		for _, u := range deletedUsers {
+			deletedUUIDs = append(deletedUUIDs, u.UUID)
+		}
+		if err := s.xrayDB.DeleteClients(deletedUUIDs); err != nil {
+			utils.WriteLog(fmt.Sprintf("⚠️ Erro ao remover clientes no SQLite: %v", err))
 		}
 	}
 
@@ -224,6 +290,14 @@ func (s *V2RayService) UpdateValidate(uuid string, days int) models.V2RayUserRes
 		}
 	}
 
+	// Sincronizar validade no SQLite se ativo
+	if s.xrayDB != nil && s.xrayDB.IsEnabled() {
+		expiresAt := time.Now().AddDate(0, 0, days).Unix()
+		if err := s.xrayDB.UpdateExpiration(uuid, expiresAt); err != nil {
+			utils.WriteLog(fmt.Sprintf("⚠️ Erro ao atualizar expiração no SQLite para %s: %v", uuid, err))
+		}
+	}
+
 	// Aguardar 1 segundo antes de reiniciar para evitar problemas de escrita
 	time.Sleep(1 * time.Second)
 
@@ -280,6 +354,13 @@ func (s *V2RayService) DisableUser(uuid string) models.V2RayUserResponse {
 			UUID:    uuid,
 			Success: false,
 			Message: fmt.Sprintf("Erro ao salvar configuração: %v", err),
+		}
+	}
+
+	// Sincronizar desabilitação/remoção no SQLite se ativo
+	if s.xrayDB != nil && s.xrayDB.IsEnabled() {
+		if err := s.xrayDB.DeleteClients([]string{uuid}); err != nil {
+			utils.WriteLog(fmt.Sprintf("⚠️ Erro ao desabilitar cliente no SQLite para %s: %v", uuid, err))
 		}
 	}
 
@@ -346,6 +427,15 @@ func (s *V2RayService) EnableUser(uuid string, expirationDate *string) models.V2
 		}
 	}
 
+	// Sincronizar habilitação/expiração no SQLite se ativo
+	if s.xrayDB != nil && s.xrayDB.IsEnabled() {
+		if expTime, err := time.Parse(time.RFC3339, *expirationDate); err == nil {
+			if err := s.xrayDB.UpdateExpiration(uuid, expTime.Unix()); err != nil {
+				utils.WriteLog(fmt.Sprintf("⚠️ Erro ao atualizar expiração no SQLite para %s: %v", uuid, err))
+			}
+		}
+	}
+
 	// Aguardar 1 segundo antes de reiniciar para evitar problemas de escrita
 	time.Sleep(1 * time.Second)
 
@@ -378,8 +468,16 @@ func (s *V2RayService) RemoveExpiredUsers() error {
 
 	// Filtrar clientes expirados preservando estrutura
 	removedCount := s.removeExpiredClientsFromAllInbounds(cfg)
+
+	// Sincronizar remoção de expirados no SQLite se ativo
+	if s.xrayDB != nil && s.xrayDB.IsEnabled() {
+		if deleted, err := s.xrayDB.DeleteExpiredClients(time.Now().Unix()); err == nil && deleted > 0 {
+			log.Printf("🧹 %d cliente(s) V2Ray/Xray expirado(s) removido(s) do SQLite xraycore.db.", deleted)
+		}
+	}
+
 	if removedCount == 0 {
-		// Nenhum cliente expirado: evita I/O e reinício desnecessário
+		// Nenhum cliente expirado no config.json: evita I/O e reinício desnecessário
 		return nil
 	}
 
@@ -925,6 +1023,13 @@ func (s *V2RayService) DeleteAllUsers() models.V2RayUserCreateResponse {
 			Error:      true,
 			Message:    fmt.Sprintf("Erro ao salvar configuração: %v", err),
 			NotDeleted: notDeleted,
+		}
+	}
+
+	// Sincronizar deleção total no SQLite se ativo
+	if s.xrayDB != nil && s.xrayDB.IsEnabled() {
+		if err := s.xrayDB.DeleteAllClients(); err != nil {
+			utils.WriteLog(fmt.Sprintf("⚠️ Erro ao limpar clientes no SQLite: %v", err))
 		}
 	}
 

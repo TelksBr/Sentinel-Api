@@ -2,7 +2,7 @@
 
 BINARY_NAME=api-v2
 BUILD_DIR=build
-VERSION?=2.0.14
+VERSION?=2.0.19
 
 # Build para Linux x64 (estático)
 .PHONY: build-x64

@@ -5,6 +5,7 @@ build/
 # Logs e dados
 logs/
 data/
+*.db
 
 # OS
 .DS_Store

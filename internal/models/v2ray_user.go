@@ -12,8 +12,30 @@ var v2rayValidate = validator.New()
 
 // V2RayUser representa um usuário V2Ray
 type V2RayUser struct {
-	UUID           string `json:"uuid" validate:"required,uuid4"`
-	ExpirationDate string `json:"expiration_date" validate:"required"` // Data de expiração no formato ISO
+	UUID           string  `json:"uuid" validate:"required,uuid4"`
+	ExpirationDate string  `json:"expiration_date" validate:"required"` // Data de expiração no formato ISO
+	Name           *string `json:"name,omitempty"`                      // Nome amigável do cliente (opcional)
+	Email          *string `json:"email,omitempty"`                     // Email identificador (opcional)
+	InboundTag     *string `json:"inbound_tag,omitempty"`              // Tag do inbound (opcional, default 'inbound-sshplus')
+	MaxConns       *int    `json:"max_conns,omitempty"`                 // Limite de conexões simultâneas (opcional, default 1)
+}
+
+// XrayClient representa a estrutura de um cliente na tabela xray_clients do SQLite
+type XrayClient struct {
+	UUID              string `json:"uuid"`
+	Name              string `json:"name"`
+	Email             string `json:"email"`
+	InboundTag        string `json:"inbound_tag"`
+	ExpiresAt         int64  `json:"expires_at"` // Unix timestamp em segundos
+	MaxConns          int    `json:"max_conns"`
+	QuotaBytes        int64  `json:"quota_bytes"`
+	QuotaAction       string `json:"quota_action"`
+	ThrottleMbps      int    `json:"throttle_mbps"`
+	TotalUplink       int64  `json:"total_uplink"`
+	TotalDownlink     int64  `json:"total_downlink"`
+	LastActive        int64  `json:"last_active"`
+	ActiveConnections int    `json:"active_connections"`
+	ActiveDevices     int    `json:"active_devices"`
 }
 
 // V2RayUserResponse representa a resposta de operações V2Ray
