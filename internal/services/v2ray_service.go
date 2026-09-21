@@ -79,10 +79,15 @@ func (s *V2RayService) CreateUsers(users []models.V2RayUser) models.V2RayUserCre
 		var err error
 		cfg, err = s.loadConfigGeneric()
 		if err != nil {
-			return models.V2RayUserCreateResponse{
-				Error:   true,
-				Message: fmt.Sprintf("Erro ao carregar configuração: %v", err),
+			if !hasDB {
+				return models.V2RayUserCreateResponse{
+					Error:   true,
+					Message: fmt.Sprintf("Erro ao carregar configuração: %v", err),
+				}
 			}
+			// Ignora o erro do config se a DB existir
+			utils.WriteLog(fmt.Sprintf("⚠️ Erro ao carregar config.json, prosseguindo apenas com SQLite: %v", err))
+			hasConfig = false
 		}
 	}
 
@@ -148,9 +153,17 @@ func (s *V2RayService) CreateUsers(users []models.V2RayUser) models.V2RayUserCre
 	}
 
 	// Sincronizar criação no SQLite se ativo
+	var dbErr error
 	if hasDB && len(xrayClients) > 0 {
-		if err := s.xrayDB.BatchUpsertClients(xrayClients); err != nil {
-			utils.WriteLog(fmt.Sprintf("⚠️ Erro ao persistir clientes no SQLite xraycore.db: %v", err))
+		dbErr = s.xrayDB.BatchUpsertClients(xrayClients)
+		if dbErr != nil {
+			utils.WriteLog(fmt.Sprintf("❌ Erro ao persistir clientes no SQLite xraycore.db: %v", dbErr))
+			if !hasConfig {
+				return models.V2RayUserCreateResponse{
+					Error:   true,
+					Message: fmt.Sprintf("Erro ao persistir usuários no SQLite (%s): %v", s.xrayDB.GetPath(), dbErr),
+				}
+			}
 		}
 	}
 
@@ -163,9 +176,20 @@ func (s *V2RayService) CreateUsers(users []models.V2RayUser) models.V2RayUserCre
 		// Não falhar a operação por causa do restart
 	}
 
+	msg := "Usuarios criados com sucesso"
+	if hasDB && dbErr == nil {
+		if hasConfig {
+			msg = fmt.Sprintf("Usuarios criados com sucesso (config.json e SQLite %s)", s.xrayDB.GetPath())
+		} else {
+			msg = fmt.Sprintf("Usuarios criados com sucesso no SQLite (%s)", s.xrayDB.GetPath())
+		}
+	} else if hasConfig && !hasDB {
+		msg = "Usuarios criados com sucesso (somente config.json - SQLite não detectado)"
+	}
+
 	return models.V2RayUserCreateResponse{
 		Error:   false,
-		Message: "Usuarios criados com sucesso",
+		Message: msg,
 		Users:   createdUsers,
 	}
 }
@@ -198,43 +222,49 @@ func (s *V2RayService) DeleteUsers(uuids []string) models.V2RayUserCreateRespons
 	if hasConfig {
 		cfg, err := s.loadConfigGeneric()
 		if err != nil {
-			return models.V2RayUserCreateResponse{
-				Error:   true,
-				Message: fmt.Sprintf("Erro ao carregar configuração: %v", err),
+			if !hasDB {
+				return models.V2RayUserCreateResponse{
+					Error:   true,
+					Message: fmt.Sprintf("Erro ao carregar configuração: %v", err),
+				}
+			}
+			utils.WriteLog(fmt.Sprintf("⚠️ Erro ao carregar config.json na deleção, prosseguindo com SQLite: %v", err))
+			hasConfig = false
+		} else {
+			// Processar cada UUID
+			for _, uuid := range uuids {
+				found := false
+				userInfo := models.V2RayUserResponse{UUID: uuid}
+				s.removeClientFromAllInbounds(cfg, uuid, &userInfo, &found)
+
+				if found {
+					deletedUsers = append(deletedUsers, userInfo)
+				} else {
+					notFound = append(notFound, uuid)
+				}
+			}
+
+			// Preencher notDeleted com usuários não encontrados
+			for _, nf := range notFound {
+				notDeleted = append(notDeleted, models.V2RayUserResponse{
+					UUID:    nf,
+					Success: false,
+					Message: "Usuário não encontrado",
+				})
+			}
+
+			// Salvar configuração
+			if err := s.saveConfigGeneric(cfg); err != nil {
+				return models.V2RayUserCreateResponse{
+					Error:      true,
+					Message:    fmt.Sprintf("Erro ao salvar configuração: %v", err),
+					NotDeleted: notDeleted,
+				}
 			}
 		}
-
-		// Processar cada UUID
-		for _, uuid := range uuids {
-			found := false
-			userInfo := models.V2RayUserResponse{UUID: uuid}
-			s.removeClientFromAllInbounds(cfg, uuid, &userInfo, &found)
-
-			if found {
-				deletedUsers = append(deletedUsers, userInfo)
-			} else {
-				notFound = append(notFound, uuid)
-			}
-		}
-
-		// Preencher notDeleted com usuários não encontrados
-		for _, nf := range notFound {
-			notDeleted = append(notDeleted, models.V2RayUserResponse{
-				UUID:    nf,
-				Success: false,
-				Message: "Usuário não encontrado",
-			})
-		}
-
-		// Salvar configuração
-		if err := s.saveConfigGeneric(cfg); err != nil {
-			return models.V2RayUserCreateResponse{
-				Error:      true,
-				Message:    fmt.Sprintf("Erro ao salvar configuração: %v", err),
-				NotDeleted: notDeleted,
-			}
-		}
-	} else if hasDB {
+	}
+	
+	if hasDB {
 		// Modo somente SQLite (sem config.json)
 		for _, uuid := range uuids {
 			client, _ := s.xrayDB.GetClient(uuid)
@@ -324,20 +354,24 @@ func (s *V2RayService) UpdateValidate(uuid string, days int) models.V2RayUserRes
 	if hasConfig {
 		cfg, err := s.loadConfigGeneric()
 		if err != nil {
-			return models.V2RayUserResponse{
-				UUID:    uuid,
-				Success: false,
-				Message: fmt.Sprintf("Erro ao carregar configuração: %v", err),
-			}
-		}
-
-		found = s.updateClientExpirationInAllInbounds(cfg, uuid, newExpirationDate)
-		if found {
-			if err := s.saveConfigGeneric(cfg); err != nil {
+			if !hasDB {
 				return models.V2RayUserResponse{
 					UUID:    uuid,
 					Success: false,
-					Message: fmt.Sprintf("Erro ao salvar configuração: %v", err),
+					Message: fmt.Sprintf("Erro ao carregar configuração: %v", err),
+				}
+			}
+			utils.WriteLog(fmt.Sprintf("⚠️ Erro ao carregar config.json em UpdateValidate, prosseguindo com SQLite: %v", err))
+			hasConfig = false
+		} else {
+			found = s.updateClientExpirationInAllInbounds(cfg, uuid, newExpirationDate)
+			if found {
+				if err := s.saveConfigGeneric(cfg); err != nil {
+					return models.V2RayUserResponse{
+						UUID:    uuid,
+						Success: false,
+						Message: fmt.Sprintf("Erro ao salvar configuração: %v", err),
+					}
 				}
 			}
 		}
@@ -406,22 +440,26 @@ func (s *V2RayService) DisableUser(uuid string) models.V2RayUserResponse {
 	if hasConfig {
 		cfg, err := s.loadConfigGeneric()
 		if err != nil {
-			return models.V2RayUserResponse{
-				UUID:    uuid,
-				Success: false,
-				Message: fmt.Sprintf("Erro ao carregar configuração: %v", err),
-			}
-		}
-
-		userInfo := models.V2RayUserResponse{UUID: uuid}
-		s.removeClientFromAllInbounds(cfg, uuid, &userInfo, &found)
-
-		if found {
-			if err := s.saveConfigGeneric(cfg); err != nil {
+			if !hasDB {
 				return models.V2RayUserResponse{
 					UUID:    uuid,
 					Success: false,
-					Message: fmt.Sprintf("Erro ao salvar configuração: %v", err),
+					Message: fmt.Sprintf("Erro ao carregar configuração: %v", err),
+				}
+			}
+			utils.WriteLog(fmt.Sprintf("⚠️ Erro ao carregar config.json em DisableUser, prosseguindo com SQLite: %v", err))
+			hasConfig = false
+		} else {
+			userInfo := models.V2RayUserResponse{UUID: uuid}
+			s.removeClientFromAllInbounds(cfg, uuid, &userInfo, &found)
+
+			if found {
+				if err := s.saveConfigGeneric(cfg); err != nil {
+					return models.V2RayUserResponse{
+						UUID:    uuid,
+						Success: false,
+						Message: fmt.Sprintf("Erro ao salvar configuração: %v", err),
+					}
 				}
 			}
 		}
@@ -495,20 +533,24 @@ func (s *V2RayService) EnableUser(uuid string, expirationDate *string) models.V2
 	if hasConfig {
 		cfg, err := s.loadConfigGeneric()
 		if err != nil {
-			return models.V2RayUserResponse{
-				UUID:    uuid,
-				Success: false,
-				Message: fmt.Sprintf("Erro ao carregar configuração: %v", err),
-			}
-		}
-
-		found = s.updateClientExpirationInAllInbounds(cfg, uuid, *expirationDate)
-		if found {
-			if err := s.saveConfigGeneric(cfg); err != nil {
+			if !hasDB {
 				return models.V2RayUserResponse{
 					UUID:    uuid,
 					Success: false,
-					Message: fmt.Sprintf("Erro ao salvar configuração: %v", err),
+					Message: fmt.Sprintf("Erro ao carregar configuração: %v", err),
+				}
+			}
+			utils.WriteLog(fmt.Sprintf("⚠️ Erro ao carregar config.json em EnableUser, prosseguindo com SQLite: %v", err))
+			hasConfig = false
+		} else {
+			found = s.updateClientExpirationInAllInbounds(cfg, uuid, *expirationDate)
+			if found {
+				if err := s.saveConfigGeneric(cfg); err != nil {
+					return models.V2RayUserResponse{
+						UUID:    uuid,
+						Success: false,
+						Message: fmt.Sprintf("Erro ao salvar configuração: %v", err),
+					}
 				}
 			}
 		}

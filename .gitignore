@@ -6,6 +6,8 @@ build/
 logs/
 data/
 *.db
+*.db-wal
+*.db-shm
 
 # OS
 .DS_Store

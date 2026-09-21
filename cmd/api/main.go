@@ -24,6 +24,7 @@ func main() {
 	tlsKey := flag.String("tls-key", "", "Caminho para a chave privada TLS (opcional)")
 	silent := flag.Bool("silent", false, "Desativa logs informativos no console")
 	logLevel := flag.String("log-level", "info", "Nível de log (debug, info, warn, error, silent)")
+	xrayDBFlag := flag.String("xray-db", "", "Caminho customizado para o banco SQLite xraycore.db (opcional)")
 	flag.Parse()
 
 	// Configuração de logs / modo silencioso
@@ -66,19 +67,23 @@ func main() {
 	}
 
 	// Detectar e inicializar banco SQLite (xraycore.db) condicionalmente
-	dbPath := services.DetectXrayDBPath("")
+	dbPath := services.DetectXrayDBPath(*xrayDBFlag)
 	var xrayDB *services.XrayDB
 	if dbPath != "" {
 		var err error
 		xrayDB, err = services.NewXrayDB(dbPath)
 		if err != nil {
+			fmt.Printf("⚠️ Erro ao abrir banco SQLite '%s': %v (operando sem SQLite)\n", dbPath, err)
 			log.Printf("⚠️ Erro ao abrir banco SQLite '%s': %v (operando sem SQLite)", dbPath, err)
 		} else {
-			xrayDB.LogStatus()
+			count, _ := xrayDB.CountClients()
+			fmt.Printf("📦 Banco SQLite ativo: %s (%d clientes registrados)\n", dbPath, count)
+			log.Printf("📦 Banco SQLite ativo: %s (%d clientes registrados)", dbPath, count)
 			defer xrayDB.Close()
 		}
 	} else {
-		log.Println("ℹ️ Banco SQLite (xraycore.db) não encontrado. Sincronização SQLite desativada.")
+		fmt.Println("ℹ️ Banco SQLite (xraycore.db) não detectado. Sincronização SQLite desativada.")
+		log.Println("ℹ️ Banco SQLite (xraycore.db) não detectado. Sincronização SQLite desativada.")
 	}
 
 	// Inicializar serviços

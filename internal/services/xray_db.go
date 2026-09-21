@@ -39,10 +39,6 @@ func DetectXrayDBPath(customPath string) string {
 	// Caminhos padrão de instalação no Linux e relativo (/opt/sshcore/xraycore.db como prioritário)
 	candidatePaths = append(candidatePaths,
 		"/opt/sshcore/xraycore.db",
-		"/etc/xray/xraycore.db",
-		"/usr/local/etc/xray/xraycore.db",
-		"/etc/sshplus/xraycore.db",
-		"./xraycore.db",
 	)
 
 	for _, p := range candidatePaths {
