@@ -133,9 +133,6 @@ func (x *XrayDB) BatchUpsertClients(clients []models.XrayClient) error {
 			throttle_mbps, total_uplink, total_downlink, last_active, active_connections, active_devices
 		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(uuid) DO UPDATE SET
-			name = excluded.name,
-			email = excluded.email,
-			inbound_tag = excluded.inbound_tag,
 			expires_at = excluded.expires_at,
 			max_conns = excluded.max_conns;
 	`)

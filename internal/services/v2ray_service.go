@@ -883,6 +883,11 @@ func (s *V2RayService) upsertClientInAllInbounds(cfg map[string]interface{}, uui
 			"expiration_date": expiration,
 		}
 		if idx >= 0 {
+			if m, ok := clients[idx].(map[string]interface{}); ok {
+				if oldEmail, ok := m["email"].(string); ok && oldEmail != "" {
+					newClient["email"] = oldEmail
+				}
+			}
 			clients[idx] = newClient
 		} else {
 			clients = append(clients, newClient)
