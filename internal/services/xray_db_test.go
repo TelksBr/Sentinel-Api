@@ -205,3 +205,62 @@ func TestXrayDB_DisabledWhenNilOrEmpty(t *testing.T) {
 		t.Errorf("esperado sem erro no Close, obteve: %v", err)
 	}
 }
+
+func TestV2RayService_WithSQLiteOnly(t *testing.T) {
+	dbPath, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	xrayDB, err := NewXrayDB(dbPath)
+	if err != nil {
+		t.Fatalf("falha ao inicializar XrayDB: %v", err)
+	}
+	defer xrayDB.Close()
+
+	// V2RayService apontando para um config.json inexistente
+	service := NewV2RayService(xrayDB)
+	service.configPath = filepath.Join(os.TempDir(), "non_existent_config_123.json")
+
+	// 1. Criar usuário deve funcionar usando o SQLite mesmo sem config.json!
+	users := []models.V2RayUser{
+		{
+			UUID:           "550e8400-e29b-41d4-a716-446655440099",
+			ExpirationDate: time.Now().AddDate(0, 0, 30).Format(time.RFC3339),
+		},
+	}
+	res := service.CreateUsers(users)
+	if res.Error {
+		t.Fatalf("CreateUsers falhou em modo somente SQLite: %s", res.Message)
+	}
+	if len(res.Users) != 1 || res.Users[0].UUID != users[0].UUID {
+		t.Fatalf("resposta inesperada de CreateUsers: %+v", res)
+	}
+
+	// Verificar se o cliente foi salvo no SQLite
+	c, err := xrayDB.GetClient(users[0].UUID)
+	if err != nil || c == nil {
+		t.Fatalf("cliente não encontrado no SQLite: %v", err)
+	}
+
+	// 2. Atualizar validade
+	upRes := service.UpdateValidate(users[0].UUID, 60)
+	if !upRes.Success {
+		t.Fatalf("UpdateValidate falhou em modo somente SQLite: %s", upRes.Message)
+	}
+
+	// 3. Deletar usuário
+	delRes := service.DeleteUsers([]string{users[0].UUID})
+	if delRes.Error {
+		t.Fatalf("DeleteUsers falhou em modo somente SQLite: %s", delRes.Message)
+	}
+	if len(delRes.Users) != 1 {
+		t.Fatalf("esperado 1 usuário deletado, obteve %d", len(delRes.Users))
+	}
+
+	// 4. Sem config e sem DB deve retornar erro
+	serviceNoDB := NewV2RayService()
+	serviceNoDB.configPath = filepath.Join(os.TempDir(), "non_existent_config_123.json")
+	resNoDB := serviceNoDB.CreateUsers(users)
+	if !resNoDB.Error {
+		t.Fatal("esperado erro quando não existe config nem DB")
+	}
+}

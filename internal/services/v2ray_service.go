@@ -55,21 +55,34 @@ func (s *V2RayService) lockConfigWrite() (unlock func(), err error) {
 
 // CreateUsers cria usuários V2Ray
 func (s *V2RayService) CreateUsers(users []models.V2RayUser) models.V2RayUserCreateResponse {
+	hasConfig := s.hasConfigFile()
+	hasDB := s.xrayDB != nil && s.xrayDB.IsEnabled()
+
+	if !hasConfig && !hasDB {
+		return models.V2RayUserCreateResponse{
+			Error:   true,
+			Message: "Nenhum arquivo de configuração (config.json) ou banco de dados (xraycore.db) do V2Ray/Xray foi detectado no servidor",
+		}
+	}
+
 	unlock, err := s.lockConfigWrite()
 	if err != nil {
 		return models.V2RayUserCreateResponse{
 			Error:   true,
-			Message: fmt.Sprintf("Erro ao obter lock de escrita do config: %v", err),
+			Message: fmt.Sprintf("Erro ao obter lock de escrita: %v", err),
 		}
 	}
 	defer unlock()
 
-	// Ler configuração atual
-	cfg, err := s.loadConfigGeneric()
-	if err != nil {
-		return models.V2RayUserCreateResponse{
-			Error:   true,
-			Message: fmt.Sprintf("Erro ao carregar configuração: %v", err),
+	var cfg map[string]interface{}
+	if hasConfig {
+		var err error
+		cfg, err = s.loadConfigGeneric()
+		if err != nil {
+			return models.V2RayUserCreateResponse{
+				Error:   true,
+				Message: fmt.Sprintf("Erro ao carregar configuração: %v", err),
+			}
 		}
 	}
 
@@ -108,7 +121,10 @@ func (s *V2RayService) CreateUsers(users []models.V2RayUser) models.V2RayUserCre
 			Message:        "Usuário criado com sucesso",
 		}
 		createdUsers = append(createdUsers, createdUser)
-		s.upsertClientInAllInbounds(cfg, user.UUID, email, user.ExpirationDate)
+
+		if hasConfig && cfg != nil {
+			s.upsertClientInAllInbounds(cfg, user.UUID, email, user.ExpirationDate)
+		}
 
 		xrayClients = append(xrayClients, models.XrayClient{
 			UUID:        user.UUID,
@@ -121,16 +137,18 @@ func (s *V2RayService) CreateUsers(users []models.V2RayUser) models.V2RayUserCre
 		})
 	}
 
-	// Salvar configuração
-	if err := s.saveConfigGeneric(cfg); err != nil {
-		return models.V2RayUserCreateResponse{
-			Error:   true,
-			Message: fmt.Sprintf("Erro ao salvar configuração: %v", err),
+	// Salvar configuração se existir arquivo JSON
+	if hasConfig && cfg != nil {
+		if err := s.saveConfigGeneric(cfg); err != nil {
+			return models.V2RayUserCreateResponse{
+				Error:   true,
+				Message: fmt.Sprintf("Erro ao salvar configuração: %v", err),
+			}
 		}
 	}
 
 	// Sincronizar criação no SQLite se ativo
-	if s.xrayDB != nil && s.xrayDB.IsEnabled() && len(xrayClients) > 0 {
+	if hasDB && len(xrayClients) > 0 {
 		if err := s.xrayDB.BatchUpsertClients(xrayClients); err != nil {
 			utils.WriteLog(fmt.Sprintf("⚠️ Erro ao persistir clientes no SQLite xraycore.db: %v", err))
 		}
@@ -154,61 +172,93 @@ func (s *V2RayService) CreateUsers(users []models.V2RayUser) models.V2RayUserCre
 
 // DeleteUsers deleta usuários V2Ray
 func (s *V2RayService) DeleteUsers(uuids []string) models.V2RayUserCreateResponse {
+	hasConfig := s.hasConfigFile()
+	hasDB := s.xrayDB != nil && s.xrayDB.IsEnabled()
+
+	if !hasConfig && !hasDB {
+		return models.V2RayUserCreateResponse{
+			Error:   true,
+			Message: "Nenhum arquivo de configuração ou banco de dados do V2Ray/Xray foi detectado no servidor",
+		}
+	}
+
 	unlock, err := s.lockConfigWrite()
 	if err != nil {
 		return models.V2RayUserCreateResponse{
 			Error:   true,
-			Message: fmt.Sprintf("Erro ao obter lock de escrita do config: %v", err),
+			Message: fmt.Sprintf("Erro ao obter lock de escrita: %v", err),
 		}
 	}
 	defer unlock()
-
-	// Ler configuração atual
-	cfg, err := s.loadConfigGeneric()
-	if err != nil {
-		return models.V2RayUserCreateResponse{
-			Error:   true,
-			Message: fmt.Sprintf("Erro ao carregar configuração: %v", err),
-		}
-	}
 
 	deletedUsers := []models.V2RayUserResponse{}
 	notDeleted := []models.V2RayUserResponse{}
 	notFound := []string{}
 
-	// Processar cada UUID
-	for _, uuid := range uuids {
-		found := false
-		userInfo := models.V2RayUserResponse{UUID: uuid}
-		s.removeClientFromAllInbounds(cfg, uuid, &userInfo, &found)
-
-		if found {
-			deletedUsers = append(deletedUsers, userInfo)
-		} else {
-			notFound = append(notFound, uuid)
+	if hasConfig {
+		cfg, err := s.loadConfigGeneric()
+		if err != nil {
+			return models.V2RayUserCreateResponse{
+				Error:   true,
+				Message: fmt.Sprintf("Erro ao carregar configuração: %v", err),
+			}
 		}
-	}
 
-	// Preencher notDeleted com usuários não encontrados
-	for _, nf := range notFound {
-		notDeleted = append(notDeleted, models.V2RayUserResponse{
-			UUID:    nf,
-			Success: false,
-			Message: "Usuário não encontrado",
-		})
-	}
+		// Processar cada UUID
+		for _, uuid := range uuids {
+			found := false
+			userInfo := models.V2RayUserResponse{UUID: uuid}
+			s.removeClientFromAllInbounds(cfg, uuid, &userInfo, &found)
 
-	// Salvar configuração
-	if err := s.saveConfigGeneric(cfg); err != nil {
-		return models.V2RayUserCreateResponse{
-			Error:      true,
-			Message:    fmt.Sprintf("Erro ao salvar configuração: %v", err),
-			NotDeleted: notDeleted,
+			if found {
+				deletedUsers = append(deletedUsers, userInfo)
+			} else {
+				notFound = append(notFound, uuid)
+			}
+		}
+
+		// Preencher notDeleted com usuários não encontrados
+		for _, nf := range notFound {
+			notDeleted = append(notDeleted, models.V2RayUserResponse{
+				UUID:    nf,
+				Success: false,
+				Message: "Usuário não encontrado",
+			})
+		}
+
+		// Salvar configuração
+		if err := s.saveConfigGeneric(cfg); err != nil {
+			return models.V2RayUserCreateResponse{
+				Error:      true,
+				Message:    fmt.Sprintf("Erro ao salvar configuração: %v", err),
+				NotDeleted: notDeleted,
+			}
+		}
+	} else if hasDB {
+		// Modo somente SQLite (sem config.json)
+		for _, uuid := range uuids {
+			client, _ := s.xrayDB.GetClient(uuid)
+			if client != nil {
+				deletedUsers = append(deletedUsers, models.V2RayUserResponse{
+					UUID:           uuid,
+					Email:          client.Email,
+					ExpirationDate: time.Unix(client.ExpiresAt, 0).Format(time.RFC3339),
+					Success:        true,
+					Message:        "Usuário deletado com sucesso",
+				})
+			} else {
+				notFound = append(notFound, uuid)
+				notDeleted = append(notDeleted, models.V2RayUserResponse{
+					UUID:    uuid,
+					Success: false,
+					Message: "Usuário não encontrado",
+				})
+			}
 		}
 	}
 
 	// Sincronizar deleção no SQLite se ativo
-	if s.xrayDB != nil && s.xrayDB.IsEnabled() && len(deletedUsers) > 0 {
+	if hasDB && len(deletedUsers) > 0 {
 		deletedUUIDs := make([]string, 0, len(deletedUsers))
 		for _, u := range deletedUsers {
 			deletedUUIDs = append(deletedUUIDs, u.UUID)
@@ -247,54 +297,68 @@ func (s *V2RayService) DeleteUsers(uuids []string) models.V2RayUserCreateRespons
 
 // UpdateValidate atualiza a validade de um usuário V2Ray
 func (s *V2RayService) UpdateValidate(uuid string, days int) models.V2RayUserResponse {
+	hasConfig := s.hasConfigFile()
+	hasDB := s.xrayDB != nil && s.xrayDB.IsEnabled()
+
+	if !hasConfig && !hasDB {
+		return models.V2RayUserResponse{
+			UUID:    uuid,
+			Success: false,
+			Message: "Nenhum arquivo de configuração ou banco de dados do V2Ray/Xray foi detectado no servidor",
+		}
+	}
+
 	unlock, err := s.lockConfigWrite()
 	if err != nil {
 		return models.V2RayUserResponse{
 			UUID:    uuid,
 			Success: false,
-			Message: fmt.Sprintf("Erro ao obter lock de escrita do config: %v", err),
+			Message: fmt.Sprintf("Erro ao obter lock de escrita: %v", err),
 		}
 	}
 	defer unlock()
 
-	// Ler configuração atual
-	cfg, err := s.loadConfigGeneric()
-	if err != nil {
-		return models.V2RayUserResponse{
-			UUID:    uuid,
-			Success: false,
-			Message: fmt.Sprintf("Erro ao carregar configuração: %v", err),
-		}
-	}
-
-	// Calcular nova data de expiração
 	newExpirationDate := time.Now().AddDate(0, 0, days).Format(time.RFC3339)
 	found := false
 
-	found = s.updateClientExpirationInAllInbounds(cfg, uuid, newExpirationDate)
+	if hasConfig {
+		cfg, err := s.loadConfigGeneric()
+		if err != nil {
+			return models.V2RayUserResponse{
+				UUID:    uuid,
+				Success: false,
+				Message: fmt.Sprintf("Erro ao carregar configuração: %v", err),
+			}
+		}
+
+		found = s.updateClientExpirationInAllInbounds(cfg, uuid, newExpirationDate)
+		if found {
+			if err := s.saveConfigGeneric(cfg); err != nil {
+				return models.V2RayUserResponse{
+					UUID:    uuid,
+					Success: false,
+					Message: fmt.Sprintf("Erro ao salvar configuração: %v", err),
+				}
+			}
+		}
+	}
+
+	if hasDB {
+		client, _ := s.xrayDB.GetClient(uuid)
+		if client != nil {
+			found = true
+			expiresAt := time.Now().AddDate(0, 0, days).Unix()
+			if err := s.xrayDB.UpdateExpiration(uuid, expiresAt); err != nil {
+				utils.WriteLog(fmt.Sprintf("⚠️ Erro ao atualizar expiração no SQLite para %s: %v", uuid, err))
+			}
+		}
+	}
 
 	if !found {
 		return models.V2RayUserResponse{
 			UUID:    uuid,
 			Success: false,
 			Message: "Usuário não encontrado",
-		}
-	}
-
-	// Salvar configuração
-	if err := s.saveConfigGeneric(cfg); err != nil {
-		return models.V2RayUserResponse{
-			UUID:    uuid,
-			Success: false,
-			Message: fmt.Sprintf("Erro ao salvar configuração: %v", err),
-		}
-	}
-
-	// Sincronizar validade no SQLite se ativo
-	if s.xrayDB != nil && s.xrayDB.IsEnabled() {
-		expiresAt := time.Now().AddDate(0, 0, days).Unix()
-		if err := s.xrayDB.UpdateExpiration(uuid, expiresAt); err != nil {
-			utils.WriteLog(fmt.Sprintf("⚠️ Erro ao atualizar expiração no SQLite para %s: %v", uuid, err))
 		}
 	}
 
@@ -316,51 +380,68 @@ func (s *V2RayService) UpdateValidate(uuid string, days int) models.V2RayUserRes
 
 // DisableUser desabilita um usuário V2Ray (remove o cliente)
 func (s *V2RayService) DisableUser(uuid string) models.V2RayUserResponse {
+	hasConfig := s.hasConfigFile()
+	hasDB := s.xrayDB != nil && s.xrayDB.IsEnabled()
+
+	if !hasConfig && !hasDB {
+		return models.V2RayUserResponse{
+			UUID:    uuid,
+			Success: false,
+			Message: "Nenhum arquivo de configuração ou banco de dados do V2Ray/Xray foi detectado no servidor",
+		}
+	}
+
 	unlock, err := s.lockConfigWrite()
 	if err != nil {
 		return models.V2RayUserResponse{
 			UUID:    uuid,
 			Success: false,
-			Message: fmt.Sprintf("Erro ao obter lock de escrita do config: %v", err),
+			Message: fmt.Sprintf("Erro ao obter lock de escrita: %v", err),
 		}
 	}
 	defer unlock()
 
-	// Ler configuração atual
-	cfg, err := s.loadConfigGeneric()
-	if err != nil {
-		return models.V2RayUserResponse{
-			UUID:    uuid,
-			Success: false,
-			Message: fmt.Sprintf("Erro ao carregar configuração: %v", err),
+	found := false
+
+	if hasConfig {
+		cfg, err := s.loadConfigGeneric()
+		if err != nil {
+			return models.V2RayUserResponse{
+				UUID:    uuid,
+				Success: false,
+				Message: fmt.Sprintf("Erro ao carregar configuração: %v", err),
+			}
+		}
+
+		userInfo := models.V2RayUserResponse{UUID: uuid}
+		s.removeClientFromAllInbounds(cfg, uuid, &userInfo, &found)
+
+		if found {
+			if err := s.saveConfigGeneric(cfg); err != nil {
+				return models.V2RayUserResponse{
+					UUID:    uuid,
+					Success: false,
+					Message: fmt.Sprintf("Erro ao salvar configuração: %v", err),
+				}
+			}
 		}
 	}
 
-	found := false
-	userInfo := models.V2RayUserResponse{UUID: uuid}
-	s.removeClientFromAllInbounds(cfg, uuid, &userInfo, &found)
+	if hasDB {
+		client, _ := s.xrayDB.GetClient(uuid)
+		if client != nil {
+			found = true
+			if err := s.xrayDB.DeleteClients([]string{uuid}); err != nil {
+				utils.WriteLog(fmt.Sprintf("⚠️ Erro ao desabilitar cliente no SQLite para %s: %v", uuid, err))
+			}
+		}
+	}
 
 	if !found {
 		return models.V2RayUserResponse{
 			UUID:    uuid,
 			Success: false,
 			Message: "Usuário não encontrado",
-		}
-	}
-
-	// Salvar configuração
-	if err := s.saveConfigGeneric(cfg); err != nil {
-		return models.V2RayUserResponse{
-			UUID:    uuid,
-			Success: false,
-			Message: fmt.Sprintf("Erro ao salvar configuração: %v", err),
-		}
-	}
-
-	// Sincronizar desabilitação/remoção no SQLite se ativo
-	if s.xrayDB != nil && s.xrayDB.IsEnabled() {
-		if err := s.xrayDB.DeleteClients([]string{uuid}); err != nil {
-			utils.WriteLog(fmt.Sprintf("⚠️ Erro ao desabilitar cliente no SQLite para %s: %v", uuid, err))
 		}
 	}
 
@@ -382,25 +463,26 @@ func (s *V2RayService) DisableUser(uuid string) models.V2RayUserResponse {
 
 // EnableUser habilita um usuário V2Ray (define data de expiração)
 func (s *V2RayService) EnableUser(uuid string, expirationDate *string) models.V2RayUserResponse {
+	hasConfig := s.hasConfigFile()
+	hasDB := s.xrayDB != nil && s.xrayDB.IsEnabled()
+
+	if !hasConfig && !hasDB {
+		return models.V2RayUserResponse{
+			UUID:    uuid,
+			Success: false,
+			Message: "Nenhum arquivo de configuração ou banco de dados do V2Ray/Xray foi detectado no servidor",
+		}
+	}
+
 	unlock, err := s.lockConfigWrite()
 	if err != nil {
 		return models.V2RayUserResponse{
 			UUID:    uuid,
 			Success: false,
-			Message: fmt.Sprintf("Erro ao obter lock de escrita do config: %v", err),
+			Message: fmt.Sprintf("Erro ao obter lock de escrita: %v", err),
 		}
 	}
 	defer unlock()
-
-	// Ler configuração atual
-	cfg, err := s.loadConfigGeneric()
-	if err != nil {
-		return models.V2RayUserResponse{
-			UUID:    uuid,
-			Success: false,
-			Message: fmt.Sprintf("Erro ao carregar configuração: %v", err),
-		}
-	}
 
 	// Se não especificou data, usar 30 dias padrão
 	if expirationDate == nil || *expirationDate == "" {
@@ -408,31 +490,47 @@ func (s *V2RayService) EnableUser(uuid string, expirationDate *string) models.V2
 		expirationDate = &defaultDate
 	}
 
-	found := s.updateClientExpirationInAllInbounds(cfg, uuid, *expirationDate)
+	found := false
+
+	if hasConfig {
+		cfg, err := s.loadConfigGeneric()
+		if err != nil {
+			return models.V2RayUserResponse{
+				UUID:    uuid,
+				Success: false,
+				Message: fmt.Sprintf("Erro ao carregar configuração: %v", err),
+			}
+		}
+
+		found = s.updateClientExpirationInAllInbounds(cfg, uuid, *expirationDate)
+		if found {
+			if err := s.saveConfigGeneric(cfg); err != nil {
+				return models.V2RayUserResponse{
+					UUID:    uuid,
+					Success: false,
+					Message: fmt.Sprintf("Erro ao salvar configuração: %v", err),
+				}
+			}
+		}
+	}
+
+	if hasDB {
+		client, _ := s.xrayDB.GetClient(uuid)
+		if client != nil {
+			found = true
+			if expTime, err := time.Parse(time.RFC3339, *expirationDate); err == nil {
+				if err := s.xrayDB.UpdateExpiration(uuid, expTime.Unix()); err != nil {
+					utils.WriteLog(fmt.Sprintf("⚠️ Erro ao atualizar expiração no SQLite para %s: %v", uuid, err))
+				}
+			}
+		}
+	}
 
 	if !found {
 		return models.V2RayUserResponse{
 			UUID:    uuid,
 			Success: false,
 			Message: "Usuário não encontrado",
-		}
-	}
-
-	// Salvar configuração
-	if err := s.saveConfigGeneric(cfg); err != nil {
-		return models.V2RayUserResponse{
-			UUID:    uuid,
-			Success: false,
-			Message: fmt.Sprintf("Erro ao salvar configuração: %v", err),
-		}
-	}
-
-	// Sincronizar habilitação/expiração no SQLite se ativo
-	if s.xrayDB != nil && s.xrayDB.IsEnabled() {
-		if expTime, err := time.Parse(time.RFC3339, *expirationDate); err == nil {
-			if err := s.xrayDB.UpdateExpiration(uuid, expTime.Unix()); err != nil {
-				utils.WriteLog(fmt.Sprintf("⚠️ Erro ao atualizar expiração no SQLite para %s: %v", uuid, err))
-			}
 		}
 	}
 
@@ -454,50 +552,67 @@ func (s *V2RayService) EnableUser(uuid string, expirationDate *string) models.V2
 
 // RemoveExpiredUsers remove usuários V2Ray expirados
 func (s *V2RayService) RemoveExpiredUsers() error {
+	hasConfig := s.hasConfigFile()
+	hasDB := s.xrayDB != nil && s.xrayDB.IsEnabled()
+
+	if !hasConfig && !hasDB {
+		return nil
+	}
+
 	unlock, err := s.lockConfigWrite()
 	if err != nil {
 		return fmt.Errorf("erro ao obter lock de escrita do config: %w", err)
 	}
 	defer unlock()
 
-	// Ler configuração atual
-	cfg, err := s.loadConfigGeneric()
-	if err != nil {
-		return fmt.Errorf("erro ao carregar configuração: %v", err)
+	if hasConfig {
+		cfg, err := s.loadConfigGeneric()
+		if err == nil {
+			removedCount := s.removeExpiredClientsFromAllInbounds(cfg)
+			if removedCount > 0 {
+				log.Printf("🧹 Removendo %d cliente(s) V2Ray/Xray expirado(s) do config.json...", removedCount)
+				if err := s.saveConfigGeneric(cfg); err == nil {
+					time.Sleep(1 * time.Second)
+					_ = s.restartOrReloadXray()
+					log.Printf("✅ %d cliente(s) V2Ray/Xray expirado(s) removido(s) do config.json com sucesso.", removedCount)
+				}
+			}
+		}
 	}
 
-	// Filtrar clientes expirados preservando estrutura
-	removedCount := s.removeExpiredClientsFromAllInbounds(cfg)
-
 	// Sincronizar remoção de expirados no SQLite se ativo
-	if s.xrayDB != nil && s.xrayDB.IsEnabled() {
+	if hasDB {
 		if deleted, err := s.xrayDB.DeleteExpiredClients(time.Now().Unix()); err == nil && deleted > 0 {
 			log.Printf("🧹 %d cliente(s) V2Ray/Xray expirado(s) removido(s) do SQLite xraycore.db.", deleted)
 		}
 	}
 
-	if removedCount == 0 {
-		// Nenhum cliente expirado no config.json: evita I/O e reinício desnecessário
-		return nil
-	}
-
-	log.Printf("🧹 Removendo %d cliente(s) V2Ray/Xray expirado(s)...", removedCount)
-
-	// Salvar configuração com backup
-	if err := s.saveConfigGeneric(cfg); err != nil {
-		return fmt.Errorf("erro ao salvar configuração: %v", err)
-	}
-
-	// Aguardar 1 segundo antes de reiniciar para evitar problemas de escrita
-	time.Sleep(1 * time.Second)
-
-	// Recarregar/Reiniciar serviço Xray/V2Ray (tenta reload primeiro)
-	if err := s.restartOrReloadXray(); err != nil {
-		utils.WriteLog(fmt.Sprintf("Erro ao recarregar/reiniciar serviço: %v", err))
-	}
-
-	log.Printf("✅ %d cliente(s) V2Ray/Xray expirado(s) removido(s) com sucesso.", removedCount)
 	return nil
+}
+
+// hasConfigFile verifica se existe algum arquivo de configuração json no disco
+func (s *V2RayService) hasConfigFile() bool {
+	configPaths := []string{
+		"/usr/local/etc/xray/config.json",  // Xray instalação padrão
+		"/etc/xray/config.json",            // Xray alternativo
+		"/etc/v2ray/config.json",           // V2Ray padrão
+		"/usr/local/etc/v2ray/config.json", // V2Ray alternativo
+	}
+
+	if s.configPath != "" {
+		if _, err := os.Stat(s.configPath); err == nil {
+			return true
+		}
+	}
+
+	for _, path := range configPaths {
+		if _, err := os.Stat(path); err == nil {
+			s.configPath = path
+			return true
+		}
+	}
+
+	return false
 }
 
 // getConfigPath detecta e retorna o caminho do config.json
@@ -941,93 +1056,101 @@ func (s *V2RayService) restartOrReloadXray() error {
 
 // DeleteAllUsers deleta todos os usuários V2Ray (remove todos os clientes de todos os inbounds)
 func (s *V2RayService) DeleteAllUsers() models.V2RayUserCreateResponse {
+	hasConfig := s.hasConfigFile()
+	hasDB := s.xrayDB != nil && s.xrayDB.IsEnabled()
+
+	if !hasConfig && !hasDB {
+		return models.V2RayUserCreateResponse{
+			Error:   true,
+			Message: "Nenhum arquivo de configuração ou banco de dados do V2Ray/Xray foi detectado no servidor",
+		}
+	}
+
 	unlock, err := s.lockConfigWrite()
 	if err != nil {
 		return models.V2RayUserCreateResponse{
 			Error:   true,
-			Message: fmt.Sprintf("Erro ao obter lock de escrita do config: %v", err),
+			Message: fmt.Sprintf("Erro ao obter lock de escrita: %v", err),
 		}
 	}
 	defer unlock()
 
-	// Ler configuração atual
-	cfg, err := s.loadConfigGeneric()
-	if err != nil {
-		return models.V2RayUserCreateResponse{
-			Error:   true,
-			Message: fmt.Sprintf("Erro ao carregar configuração: %v", err),
-		}
-	}
-
 	deletedUsers := []models.V2RayUserResponse{}
 	notDeleted := []models.V2RayUserResponse{}
 
-	// Processar todos os inbounds e remover todos os clientes
-	inbounds, ok := cfg["inbounds"].([]interface{})
-	if !ok {
-		return models.V2RayUserCreateResponse{
-			Error:   true,
-			Message: "Inbounds não encontrado ou inválido",
-		}
-	}
-
-	// Remover todos os clientes de todos os inbounds
-	for i := range inbounds {
-		inbound, ok := inbounds[i].(map[string]interface{})
-		if !ok {
-			continue
-		}
-		settings, _ := inbound["settings"].(map[string]interface{})
-		if settings == nil {
-			continue
-		}
-		clients, _ := settings["clients"].([]interface{})
-		if clients == nil {
-			continue
-		}
-
-		// Coletar informações dos usuários antes de deletar
-		for _, c := range clients {
-			if m, ok := c.(map[string]interface{}); ok {
-				userInfo := models.V2RayUserResponse{
-					UUID:    "",
-					Email:   "",
-					Success: true,
-					Message: "Usuário deletado com sucesso",
-				}
-				if id, ok := m["id"].(string); ok {
-					userInfo.UUID = id
-				}
-				if email, ok := m["email"].(string); ok {
-					userInfo.Email = email
-				}
-				if exp, ok := m["expiration_date"].(string); ok {
-					userInfo.ExpirationDate = exp
-				}
-				deletedUsers = append(deletedUsers, userInfo)
+	if hasConfig {
+		cfg, err := s.loadConfigGeneric()
+		if err != nil {
+			return models.V2RayUserCreateResponse{
+				Error:   true,
+				Message: fmt.Sprintf("Erro ao carregar configuração: %v", err),
 			}
 		}
 
-		// Limpar array de clientes (remover todos)
-		settings["clients"] = []interface{}{}
-		inbound["settings"] = settings
-		inbounds[i] = inbound
-	}
-	cfg["inbounds"] = inbounds
+		inbounds, ok := cfg["inbounds"].([]interface{})
+		if !ok {
+			return models.V2RayUserCreateResponse{
+				Error:   true,
+				Message: "Inbounds não encontrado ou inválido",
+			}
+		}
 
-	totalBefore := len(deletedUsers)
+		// Remover todos os clientes de todos os inbounds
+		for i := range inbounds {
+			inbound, ok := inbounds[i].(map[string]interface{})
+			if !ok {
+				continue
+			}
+			settings, _ := inbound["settings"].(map[string]interface{})
+			if settings == nil {
+				continue
+			}
+			clients, _ := settings["clients"].([]interface{})
+			if clients == nil {
+				continue
+			}
 
-	// Salvar configuração
-	if err := s.saveConfigGeneric(cfg); err != nil {
-		return models.V2RayUserCreateResponse{
-			Error:      true,
-			Message:    fmt.Sprintf("Erro ao salvar configuração: %v", err),
-			NotDeleted: notDeleted,
+			// Coletar informações dos usuários antes de deletar
+			for _, c := range clients {
+				if m, ok := c.(map[string]interface{}); ok {
+					userInfo := models.V2RayUserResponse{
+						UUID:    "",
+						Email:   "",
+						Success: true,
+						Message: "Usuário deletado com sucesso",
+					}
+					if id, ok := m["id"].(string); ok {
+						userInfo.UUID = id
+					}
+					if email, ok := m["email"].(string); ok {
+						userInfo.Email = email
+					}
+					if exp, ok := m["expiration_date"].(string); ok {
+						userInfo.ExpirationDate = exp
+					}
+					deletedUsers = append(deletedUsers, userInfo)
+				}
+			}
+
+			// Limpar array de clientes (remover todos)
+			settings["clients"] = []interface{}{}
+			inbound["settings"] = settings
+			inbounds[i] = inbound
+		}
+		cfg["inbounds"] = inbounds
+
+		// Salvar configuração
+		if err := s.saveConfigGeneric(cfg); err != nil {
+			return models.V2RayUserCreateResponse{
+				Error:      true,
+				Message:    fmt.Sprintf("Erro ao salvar configuração: %v", err),
+				NotDeleted: notDeleted,
+			}
 		}
 	}
 
 	// Sincronizar deleção total no SQLite se ativo
-	if s.xrayDB != nil && s.xrayDB.IsEnabled() {
+	if hasDB {
 		if err := s.xrayDB.DeleteAllClients(); err != nil {
 			utils.WriteLog(fmt.Sprintf("⚠️ Erro ao limpar clientes no SQLite: %v", err))
 		}
@@ -1046,7 +1169,7 @@ func (s *V2RayService) DeleteAllUsers() models.V2RayUserCreateResponse {
 		Error:        false,
 		Message:      fmt.Sprintf("Todos os usuários V2Ray foram deletados com sucesso (%d usuários)", len(deletedUsers)),
 		Users:        deletedUsers,
-		TotalBefore:  totalBefore,
+		TotalBefore:  len(deletedUsers),
 		TotalDeleted: len(deletedUsers),
 		TotalAfter:   0,
 		NotDeleted:   notDeleted,
