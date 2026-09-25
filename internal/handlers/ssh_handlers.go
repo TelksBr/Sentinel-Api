@@ -211,7 +211,7 @@ func (h *SSHHandlers) CreateTestUser(c *gin.Context) {
 	c.JSON(status, result)
 }
 
-// DisableUser desabilita um usuário SSH
+// DisableUser desabilita um usuário SSH (DESCONTINUADO: Rota descontinuada para evitar deleção indevida de usuários)
 func (h *SSHHandlers) DisableUser(c *gin.Context) {
 	username := c.Param("username")
 	if username == "" {
@@ -220,12 +220,7 @@ func (h *SSHHandlers) DisableUser(c *gin.Context) {
 	}
 
 	result := h.sshService.DisableUser(username)
-	status := http.StatusOK
-	if !result.Success {
-		status = http.StatusBadRequest
-	}
-
-	c.JSON(status, result)
+	c.JSON(http.StatusGone, result)
 }
 
 // EnableUser habilita um usuário SSH
@@ -243,6 +238,10 @@ func (h *SSHHandlers) EnableUser(c *gin.Context) {
 	}
 
 	result := h.sshService.EnableUser(username, request.Days)
+	if result.Success {
+		_, _ = h.cronService.RemovePendingSSHTestCronjobs([]string{username})
+	}
+
 	status := http.StatusOK
 	if !result.Success {
 		status = http.StatusBadRequest

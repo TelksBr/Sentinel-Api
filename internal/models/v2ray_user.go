@@ -120,7 +120,7 @@ func (u *V2RayUser) IsExpired() bool {
 	}
 
 	// Comparar até os minutos (como na implementação original)
-	now := time.Now()
+	now := time.Now().UTC()
 	return expirationTime.Truncate(time.Minute).Before(now.Truncate(time.Minute)) ||
 		expirationTime.Truncate(time.Minute).Equal(now.Truncate(time.Minute))
 }
@@ -140,7 +140,7 @@ func (u *V2RayUser) GenerateEmail() string {
 	return "v2ray_" + username + "@" + domains[domainIndex]
 }
 
-// GetExpirationDateFromDays calcula a data de expiração baseada nos dias
+// GetExpirationDateFromDays calcula a data de expiração baseada nos dias em UTC
 func (u *V2RayUser) GetExpirationDateFromDays(days int) string {
-	return time.Now().AddDate(0, 0, days).Format(time.RFC3339)
+	return time.Now().UTC().AddDate(0, 0, days).Format(time.RFC3339)
 }

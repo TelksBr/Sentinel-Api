@@ -326,7 +326,7 @@ func ParseLimitGECOS(gecos string) int {
 
 // UpsertUser insere ou atualiza um usuário SSH nas tabelas do Unix.
 func (s *UnixStore) UpsertUser(username, passwordHash string, uid, gid int, expireDays string, shell string, limit int) (isNew bool) {
-	todayEpochDays := strconv.FormatInt(time.Now().Unix()/86400, 10)
+	todayEpochDays := strconv.FormatInt(time.Now().UTC().Unix()/86400, 10)
 	if shell == "" {
 		shell = "/bin/false"
 	}
@@ -631,7 +631,7 @@ func (s *UnixStore) DeleteAllNonSystemUsers() (deletedUsernames []string, delete
 // DeleteExpiredUsers remove todos os usuários SSH não-sistema cuja data de expiração no shadow já passou (ExpireDays <= hoje).
 // Apenas usuários com shell /bin/false ou /usr/sbin/nologin e UID >= 1000 são considerados.
 func (s *UnixStore) DeleteExpiredUsers() (deletedUsernames []string, deletedUIDs []int, totalDeleted int) {
-	currentEpochDays := time.Now().Unix() / 86400
+	currentEpochDays := time.Now().UTC().Unix() / 86400
 
 	// 1. Identificar sistema primeiro
 	systemUsersSet := make(map[string]bool, len(s.Passwd))
@@ -654,7 +654,7 @@ func (s *UnixStore) DeleteExpiredUsers() (deletedUsernames []string, deletedUIDs
 		if err != nil || expireDays <= 0 {
 			continue
 		}
-		if currentEpochDays >= expireDays {
+		if currentEpochDays > expireDays {
 			expiredUsernamesMap[sh.Username] = true
 		}
 	}
@@ -729,12 +729,10 @@ func (s *UnixStore) SetUserDisabled(username string) (uid int, err error) {
 	// 1. Shell nologin
 	s.Passwd[pIdx].Shell = "/usr/sbin/nologin"
 
-	// 2. Travar hash se não travado e definir expiração para ontem (dia 1 ou epoch ontem)
+	// 2. Travar hash se não travado (não altera ExpireDays para evitar deleção acidental)
 	if !strings.HasPrefix(s.Shadow[sIdx].PasswordHash, "!") {
 		s.Shadow[sIdx].PasswordHash = "!" + s.Shadow[sIdx].PasswordHash
 	}
-	yesterdayEpoch := strconv.FormatInt((time.Now().Unix()/86400)-1, 10)
-	s.Shadow[sIdx].ExpireDays = yesterdayEpoch
 
 	return s.Passwd[pIdx].UID, nil
 }
@@ -757,26 +755,26 @@ func (s *UnixStore) SetUserEnabled(username string, expireDays string) error {
 	// 2. Destravar hash se travado
 	s.Shadow[sIdx].PasswordHash = strings.TrimPrefix(s.Shadow[sIdx].PasswordHash, "!")
 	s.Shadow[sIdx].ExpireDays = expireDays
-	s.Shadow[sIdx].LastChanged = strconv.FormatInt(time.Now().Unix()/86400, 10)
+	s.Shadow[sIdx].LastChanged = strconv.FormatInt(time.Now().UTC().Unix()/86400, 10)
 
 	return nil
 }
 
-// DaysToShadowExpireDays calcula os dias desde epoch (01/01/1970) para daqui a N dias.
+// DaysToShadowExpireDays calcula os dias desde epoch (01/01/1970) para daqui a N dias em UTC.
 func DaysToShadowExpireDays(daysFromNow int) string {
 	if daysFromNow <= 0 {
 		return ""
 	}
-	expTime := time.Now().AddDate(0, 0, daysFromNow)
+	expTime := time.Now().UTC().AddDate(0, 0, daysFromNow)
 	return strconv.FormatInt(expTime.Unix()/86400, 10)
 }
 
-// HoursToShadowExpireDays calcula os dias desde epoch para daqui a N horas (mínimo 1 dia).
+// HoursToShadowExpireDays calcula os dias desde epoch para daqui a N horas (mínimo 1 dia) em UTC.
 func HoursToShadowExpireDays(hoursFromNow int) string {
 	if hoursFromNow <= 0 {
 		return ""
 	}
-	expTime := time.Now().Add(time.Duration(hoursFromNow) * time.Hour)
+	expTime := time.Now().UTC().Add(time.Duration(hoursFromNow) * time.Hour)
 	return strconv.FormatInt(expTime.Unix()/86400, 10)
 }
 
@@ -1048,7 +1046,7 @@ func CountTotalSSHUsers(baseDir ...string) int {
 func (s *UnixStore) CountExpiredSSHUsers() int {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
-	currentEpochDays := time.Now().Unix() / 86400
+	currentEpochDays := time.Now().UTC().Unix() / 86400
 
 	systemUsersSet := make(map[string]bool, len(s.Passwd))
 	for _, p := range s.Passwd {
@@ -1063,7 +1061,7 @@ func (s *UnixStore) CountExpiredSSHUsers() int {
 			continue
 		}
 		exp, err := strconv.ParseInt(sh.ExpireDays, 10, 64)
-		if err == nil && exp > 0 && currentEpochDays >= exp {
+		if err == nil && exp > 0 && currentEpochDays > exp {
 			expiredMap[sh.Username] = true
 		}
 	}
@@ -1092,7 +1090,7 @@ func CountTotalExpiredSSHUsers(baseDir ...string) int {
 	}
 	defer shadowFile.Close()
 
-	currentEpochDays := time.Now().Unix() / 86400
+	currentEpochDays := time.Now().UTC().Unix() / 86400
 	expiredShadow := make(map[string]bool)
 
 	shadowScanner := bufio.NewScanner(shadowFile)
@@ -1114,7 +1112,7 @@ func CountTotalExpiredSSHUsers(baseDir ...string) int {
 		if err != nil || expireDays <= 0 {
 			continue
 		}
-		if currentEpochDays >= expireDays {
+		if currentEpochDays > expireDays {
 			expiredShadow[username] = true
 		}
 	}

@@ -106,14 +106,14 @@ func (r *SSHUserEnableRequest) Validate() error {
 	return sshValidate.Struct(r)
 }
 
-// GetExpirationDate calcula a data de expiração baseada nos dias de validade
+// GetExpirationDate calcula a data de expiração baseada nos dias de validade em UTC
 func (u *SSHUser) GetExpirationDate() time.Time {
-	return time.Now().AddDate(0, 0, u.ValidateDays)
+	return time.Now().UTC().AddDate(0, 0, u.ValidateDays)
 }
 
-// GetTestExpirationDate calcula a data de expiração para usuários de teste
+// GetTestExpirationDate calcula a data de expiração para usuários de teste em UTC
 func (u *SSHUser) GetTestExpirationDate() time.Time {
-	return time.Now().Add(time.Duration(u.Time) * time.Hour)
+	return time.Now().UTC().Add(time.Duration(u.Time) * time.Hour)
 }
 
 // IsReservedUsername verifica se o username está na lista de reservados

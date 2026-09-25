@@ -348,7 +348,7 @@ func (s *V2RayService) UpdateValidate(uuid string, days int) models.V2RayUserRes
 	}
 	defer unlock()
 
-	newExpirationDate := time.Now().AddDate(0, 0, days).Format(time.RFC3339)
+	newExpirationDate := time.Now().UTC().AddDate(0, 0, days).Format(time.RFC3339)
 	found := false
 
 	if hasConfig {
@@ -381,7 +381,7 @@ func (s *V2RayService) UpdateValidate(uuid string, days int) models.V2RayUserRes
 		client, _ := s.xrayDB.GetClient(uuid)
 		if client != nil {
 			found = true
-			expiresAt := time.Now().AddDate(0, 0, days).Unix()
+			expiresAt := time.Now().UTC().AddDate(0, 0, days).Unix()
 			if err := s.xrayDB.UpdateExpiration(uuid, expiresAt); err != nil {
 				utils.WriteLog(fmt.Sprintf("⚠️ Erro ao atualizar expiração no SQLite para %s: %v", uuid, err))
 			}
@@ -522,9 +522,9 @@ func (s *V2RayService) EnableUser(uuid string, expirationDate *string) models.V2
 	}
 	defer unlock()
 
-	// Se não especificou data, usar 30 dias padrão
+	// Se não especificou data, usar 30 dias padrão em UTC
 	if expirationDate == nil || *expirationDate == "" {
-		defaultDate := time.Now().AddDate(0, 0, 30).Format(time.RFC3339)
+		defaultDate := time.Now().UTC().AddDate(0, 0, 30).Format(time.RFC3339)
 		expirationDate = &defaultDate
 	}
 
@@ -624,7 +624,7 @@ func (s *V2RayService) RemoveExpiredUsers() error {
 
 	// Sincronizar remoção de expirados no SQLite se ativo
 	if hasDB {
-		if deleted, err := s.xrayDB.DeleteExpiredClients(time.Now().Unix()); err == nil && deleted > 0 {
+		if deleted, err := s.xrayDB.DeleteExpiredClients(time.Now().UTC().Unix()); err == nil && deleted > 0 {
 			log.Printf("🧹 %d cliente(s) V2Ray/Xray expirado(s) removido(s) do SQLite xraycore.db.", deleted)
 		}
 	}
@@ -979,7 +979,7 @@ func (s *V2RayService) removeExpiredClientsFromAllInbounds(cfg map[string]interf
 	if !ok {
 		return 0
 	}
-	now := time.Now()
+	now := time.Now().UTC()
 	removedCount := 0
 	for i := range inbounds {
 		inbound, ok := inbounds[i].(map[string]interface{})

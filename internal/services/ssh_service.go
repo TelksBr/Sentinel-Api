@@ -124,7 +124,9 @@ func (s *SSHService) CreateUsers(users []models.SSHUser) models.SSHUserCreateRes
 		}
 
 		var expireDays string
-		if user.IsTest {
+		if user.ValidateDays > 0 {
+			expireDays = utils.DaysToShadowExpireDays(user.ValidateDays)
+		} else if user.IsTest {
 			expireDays = utils.DaysToShadowExpireDays(4)
 		} else {
 			expireDays = utils.DaysToShadowExpireDays(user.ValidateDays)
@@ -250,7 +252,7 @@ func (s *SSHService) UpdatePassword(username, password string) models.SSHUserRes
 	for i := range s.store.Shadow {
 		if s.store.Shadow[i].Username == username {
 			s.store.Shadow[i].PasswordHash = hashedPassword
-			s.store.Shadow[i].LastChanged = fmt.Sprintf("%d", time.Now().Unix()/86400)
+			s.store.Shadow[i].LastChanged = fmt.Sprintf("%d", time.Now().UTC().Unix()/86400)
 			found = true
 			break
 		}
@@ -529,67 +531,13 @@ func (s *SSHService) DeleteUsers(usernames []string) models.SSHUserCreateRespons
 	}
 }
 
-// DisableUser desabilita um usuário SSH (bloqueio, nologin, expiração no passado e kill de processos)
+// DisableUser desabilita um usuário SSH (DESCONTINUADO: Esta rota foi descontinuada a pedido operacional para evitar efeitos colaterais de deleção de usuários válidos)
 func (s *SSHService) DisableUser(username string) models.SSHUserResponse {
-	if utils.IsReservedUsername(username) {
-		return models.SSHUserResponse{
-			Username: username,
-			Success:  false,
-			Message:  "Cannot disable reserved/system user",
-		}
-	}
-
-	unlock, err := s.store.Lock()
-	if err != nil {
-		return models.SSHUserResponse{
-			Username: username,
-			Success:  false,
-			Message:  fmt.Sprintf("Error locking system files: %v", err),
-		}
-	}
-	defer unlock()
-
-	if err := s.store.Load(); err != nil {
-		return models.SSHUserResponse{
-			Username: username,
-			Success:  false,
-			Message:  fmt.Sprintf("Error loading system files: %v", err),
-		}
-	}
-
-	// Salvar expiração atual para backup antes de desativar
-	for _, sh := range s.store.Shadow {
-		if sh.Username == username {
-			_ = utils.SaveExpirationBackup(username, sh.ExpireDays)
-			break
-		}
-	}
-
-	uid, err := s.store.SetUserDisabled(username)
-	if err != nil {
-		return models.SSHUserResponse{
-			Username: username,
-			Success:  false,
-			Message:  err.Error(),
-		}
-	}
-
-	if err := s.store.Save(); err != nil {
-		return models.SSHUserResponse{
-			Username: username,
-			Success:  false,
-			Message:  fmt.Sprintf("Error saving system files: %v", err),
-		}
-	}
-
-	// Matar túneis/sessões ativas
-	utils.TerminateUserSessions(username, uid)
-	_, _ = utils.ProxyServerKillUser(username)
-
+	log.Printf("⚠️ [DEPRECATED] DisableUser foi chamado para o usuário '%s', mas a rota/função foi descontinuada.", username)
 	return models.SSHUserResponse{
 		Username: username,
-		Success:  true,
-		Message:  "User disabled successfully",
+		Success:  false,
+		Message:  "Rota descontinuada: a desativação de usuários foi descontinuada e não deve ser utilizada",
 	}
 }
 

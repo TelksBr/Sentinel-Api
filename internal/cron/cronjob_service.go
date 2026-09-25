@@ -107,7 +107,7 @@ func (cs *CronjobService) AddTestCronjob(id, cronType string, hoursFromNow int) 
 		return fmt.Errorf("horas inválidas: %d (deve estar entre 1 e 72)", hoursFromNow)
 	}
 
-	execTime := time.Now().Add(time.Duration(hoursFromNow) * time.Hour)
+	execTime := time.Now().UTC().Add(time.Duration(hoursFromNow) * time.Hour)
 
 	// Validar que a data calculada é válida
 	if execTime.IsZero() {
@@ -224,7 +224,7 @@ func (cs *CronjobService) executeTestUserCronjobs() {
 		return
 	}
 
-	now := time.Now()
+	now := time.Now().UTC()
 	activeCronjobs := make([]Cronjob, 0, len(cronjobs))
 	var changed bool
 
@@ -246,8 +246,8 @@ func (cs *CronjobService) executeTestUserCronjobs() {
 		}
 
 		// Validar range razoável
-		minTime := time.Now().AddDate(-1, 0, 0)
-		maxTime := time.Now().AddDate(1, 0, 0)
+		minTime := time.Now().UTC().AddDate(-1, 0, 0)
+		maxTime := time.Now().UTC().AddDate(1, 0, 0)
 		if execTime.Before(minTime) || execTime.After(maxTime) {
 			log.Printf("❌ Cronjob com data fora do range removido - ID: %s, Tipo: %s, ExecTime: %s",
 				job.ID, job.Type, execTime.Format(time.RFC3339))
